@@ -1,5 +1,5 @@
 use criterion::*;
-use poseidon2::Poseidon2;
+use taceo_poseidon2::Poseidon2;
 
 fn poseidon2_bench(c: &mut Criterion) {
     c.bench_function("Poseidon2 Permutation (t=3)", |b| {

@@ -1,0 +1,9 @@
+target
+.vscode
+flamegraph.svg
+perf.data
+perf.data.old
+*.pdf
+
+# This is a library crate, so don't commit Cargo.lock
+Cargo.lock

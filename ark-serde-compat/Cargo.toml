@@ -1,17 +1,17 @@
 [package]
-name = "ark-serde-compat"
+name = "taceo-ark-serde-compat"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-homepage.workspace = true
 repository.workspace = true
 license.workspace = true
-publish.workspace = true
-readme.workspace = true
+publish = true
+readme = "./Readme.md"
+description = "Various serde compatibility implementations for arkworks-rs types, including serializing to strings for use in human-readable JSON."
 
 [dependencies]
-ark-babyjubjub = { workspace = true }
+taceo-ark-babyjubjub = { workspace = true }
 ark-bn254.workspace = true
 ark-ec.workspace = true
 serde = { workspace = true, features = ["derive"] }

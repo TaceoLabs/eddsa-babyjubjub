@@ -36,7 +36,7 @@ pub fn serialize_bn254_g2<S: Serializer>(
 }
 
 pub fn serialize_babyjubjub_affine<S: Serializer>(
-    p: &ark_babyjubjub::EdwardsAffine,
+    p: &taceo_ark_babyjubjub::EdwardsAffine,
     ser: S,
 ) -> Result<S::Ok, S::Error> {
     let (x, y) = (p.x, p.y);
@@ -47,7 +47,7 @@ pub fn serialize_babyjubjub_affine<S: Serializer>(
 }
 
 pub fn serialize_babyjubjub_affine_sequence<S: Serializer>(
-    ps: &[ark_babyjubjub::EdwardsAffine],
+    ps: &[taceo_ark_babyjubjub::EdwardsAffine],
     ser: S,
 ) -> Result<S::Ok, S::Error> {
     let mut seq = ser.serialize_seq(Some(ps.len()))?;
@@ -59,14 +59,14 @@ pub fn serialize_babyjubjub_affine_sequence<S: Serializer>(
 }
 
 pub fn serialize_babyjubjub_scalar<S: Serializer>(
-    p: &ark_babyjubjub::Fr,
+    p: &taceo_ark_babyjubjub::Fr,
     ser: S,
 ) -> Result<S::Ok, S::Error> {
     ser.serialize_str(&p.to_string())
 }
 
 pub fn serialize_babyjubjub_base<S: Serializer>(
-    p: &ark_babyjubjub::Fq,
+    p: &taceo_ark_babyjubjub::Fq,
     ser: S,
 ) -> Result<S::Ok, S::Error> {
     ser.serialize_str(&p.to_string())
@@ -109,7 +109,7 @@ pub fn serialize_bn254_g1_sequence<S: Serializer>(
 }
 
 pub fn serialize_babyjubjub_base_sequence<S: Serializer>(
-    ps: &[ark_babyjubjub::Fq],
+    ps: &[taceo_ark_babyjubjub::Fq],
     ser: S,
 ) -> Result<S::Ok, S::Error> {
     let mut seq = ser.serialize_seq(Some(ps.len()))?;
@@ -135,7 +135,7 @@ where
 
 pub fn deserialize_babyjubjub_affine<'de, D>(
     deserializer: D,
-) -> Result<ark_babyjubjub::EdwardsAffine, D::Error>
+) -> Result<taceo_ark_babyjubjub::EdwardsAffine, D::Error>
 where
     D: de::Deserializer<'de>,
 {
@@ -144,7 +144,7 @@ where
 
 pub fn deserialize_babyjubjub_affine_sequence<'de, D>(
     deserializer: D,
-) -> Result<Vec<ark_babyjubjub::EdwardsAffine>, D::Error>
+) -> Result<Vec<taceo_ark_babyjubjub::EdwardsAffine>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
@@ -153,7 +153,7 @@ where
 
 pub fn deserialize_user_key_batch<'de, D>(
     deserializer: D,
-) -> Result<[ark_babyjubjub::EdwardsAffine; 7], D::Error>
+) -> Result<[taceo_ark_babyjubjub::EdwardsAffine; 7], D::Error>
 where
     D: de::Deserializer<'de>,
 {
@@ -163,14 +163,16 @@ where
 
 pub fn deserialize_babyjubjub_scalar<'de, D>(
     deserializer: D,
-) -> Result<ark_babyjubjub::Fr, D::Error>
+) -> Result<taceo_ark_babyjubjub::Fr, D::Error>
 where
     D: de::Deserializer<'de>,
 {
     deserializer.deserialize_str(BabyJubJubScalarVisitor)
 }
 
-pub fn deserialize_babyjubjub_base<'de, D>(deserializer: D) -> Result<ark_babyjubjub::Fq, D::Error>
+pub fn deserialize_babyjubjub_base<'de, D>(
+    deserializer: D,
+) -> Result<taceo_ark_babyjubjub::Fq, D::Error>
 where
     D: de::Deserializer<'de>,
 {
@@ -195,7 +197,7 @@ where
 
 pub fn deserialize_babyjubjub_base_sequence<'de, D>(
     deserializer: D,
-) -> Result<Vec<ark_babyjubjub::Fq>, D::Error>
+) -> Result<Vec<taceo_ark_babyjubjub::Fq>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
@@ -266,10 +268,10 @@ fn g2_from_strings_projective(
 fn babyjubjub_affine_from_strings(
     x: &str,
     y: &str,
-) -> Result<ark_babyjubjub::EdwardsAffine, SerializationError> {
-    let x = ark_babyjubjub::Fq::from_str(x).map_err(|_| SerializationError::InvalidData)?;
-    let y = ark_babyjubjub::Fq::from_str(y).map_err(|_| SerializationError::InvalidData)?;
-    let p = ark_babyjubjub::EdwardsAffine::new_unchecked(x, y);
+) -> Result<taceo_ark_babyjubjub::EdwardsAffine, SerializationError> {
+    let x = taceo_ark_babyjubjub::Fq::from_str(x).map_err(|_| SerializationError::InvalidData)?;
+    let y = taceo_ark_babyjubjub::Fq::from_str(y).map_err(|_| SerializationError::InvalidData)?;
+    let p = taceo_ark_babyjubjub::EdwardsAffine::new_unchecked(x, y);
     if p.is_zero() {
         return Ok(p);
     }
@@ -365,7 +367,7 @@ impl<'de> de::Visitor<'de> for Bn254G2Visitor {
 struct BabyJubJubScalarVisitor;
 
 impl<'de> de::Visitor<'de> for BabyJubJubScalarVisitor {
-    type Value = ark_babyjubjub::Fr;
+    type Value = taceo_ark_babyjubjub::Fr;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         formatter.write_str("a sting representing a babyjubjub scalar field point")
@@ -375,14 +377,14 @@ impl<'de> de::Visitor<'de> for BabyJubJubScalarVisitor {
     where
         E: de::Error,
     {
-        ark_babyjubjub::Fr::from_str(v).map_err(|_| E::custom("Invalid data"))
+        taceo_ark_babyjubjub::Fr::from_str(v).map_err(|_| E::custom("Invalid data"))
     }
 }
 
 struct BabyJubJubBaseVisitor;
 
 impl<'de> de::Visitor<'de> for BabyJubJubBaseVisitor {
-    type Value = ark_babyjubjub::Fq;
+    type Value = taceo_ark_babyjubjub::Fq;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         formatter.write_str("a sting representing a babyjubjub base field point")
@@ -392,14 +394,14 @@ impl<'de> de::Visitor<'de> for BabyJubJubBaseVisitor {
     where
         E: de::Error,
     {
-        ark_babyjubjub::Fq::from_str(v).map_err(|_| E::custom("Invalid data"))
+        taceo_ark_babyjubjub::Fq::from_str(v).map_err(|_| E::custom("Invalid data"))
     }
 }
 
 struct BabyJubJubAffineVisitor;
 
 impl<'de> de::Visitor<'de> for BabyJubJubAffineVisitor {
-    type Value = ark_babyjubjub::EdwardsAffine;
+    type Value = taceo_ark_babyjubjub::EdwardsAffine;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         formatter.write_str("a sequence of 2 strings, representing a affine babyjubjub point")
@@ -530,7 +532,7 @@ impl<'de> de::Visitor<'de> for Bn254G1SeqVisitor {
 struct BabyJubJubBaseSeqVisitor;
 
 impl<'de> de::Visitor<'de> for BabyJubJubBaseSeqVisitor {
-    type Value = Vec<ark_babyjubjub::Fq>;
+    type Value = Vec<taceo_ark_babyjubjub::Fq>;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         formatter.write_str("a sequence of elements representing babyjubjub scalar points.")
@@ -543,7 +545,8 @@ impl<'de> de::Visitor<'de> for BabyJubJubBaseSeqVisitor {
         let mut values = vec![];
         while let Some(v) = seq.next_element::<String>()? {
             values.push(
-                ark_babyjubjub::Fq::from_str(&v).map_err(|_| de::Error::custom("Invalid data"))?,
+                taceo_ark_babyjubjub::Fq::from_str(&v)
+                    .map_err(|_| de::Error::custom("Invalid data"))?,
             );
         }
         Ok(values)
@@ -555,7 +558,7 @@ struct BabyJubJubAffineSeqVisitor {
 }
 
 impl<'de> de::Visitor<'de> for BabyJubJubAffineSeqVisitor {
-    type Value = Vec<ark_babyjubjub::EdwardsAffine>;
+    type Value = Vec<taceo_ark_babyjubjub::EdwardsAffine>;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         if let Some(size) = self.size {

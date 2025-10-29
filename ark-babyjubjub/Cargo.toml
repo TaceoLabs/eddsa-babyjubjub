@@ -1,15 +1,16 @@
 [package]
-name = "ark-babyjubjub"
+name = "taceo-ark-babyjubjub"
 version = "0.5.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-homepage.workspace = true
 repository.workspace = true
 license.workspace = true
-publish.workspace = true
-readme.workspace = true
 description = "A Twisted Edwards curve defined over the scalar field of the BN254 curve, compatible with the Baby Jubjub impl in Circom."
+publish = true
+readme = "./README.md"
+exclude = ["scripts/*"]
+
 
 [dependencies]
 ark-bn254 = { workspace = true, features = ["scalar_field"] }
