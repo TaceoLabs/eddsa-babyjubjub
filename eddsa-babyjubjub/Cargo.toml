@@ -8,6 +8,7 @@ repository.workspace = true
 license.workspace = true
 readme = "./README.md"
 publish = true
+description = "An EdDSA signature scheme implementation over the Baby Jubjub elliptic curve using Poseidon2, useful for SNARK-friendliness."
 
 [dependencies]
 ark-ec = { workspace = true }
