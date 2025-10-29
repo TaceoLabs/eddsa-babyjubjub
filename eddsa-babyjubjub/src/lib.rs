@@ -182,8 +182,8 @@ pub struct EdDSASignature {
     #[serde(serialize_with = "taceo_ark_serde_compat::serialize_babyjubjub_affine")]
     #[serde(deserialize_with = "taceo_ark_serde_compat::deserialize_babyjubjub_affine")]
     pub r: Affine,
-    #[serde(serialize_with = "taceo_ark_serde_compat::serialize_babyjubjub_scalar")]
-    #[serde(deserialize_with = "taceo_ark_serde_compat::deserialize_babyjubjub_scalar")]
+    #[serde(serialize_with = "taceo_ark_serde_compat::serialize_babyjubjub_fr")]
+    #[serde(deserialize_with = "taceo_ark_serde_compat::deserialize_babyjubjub_fr")]
     pub s: ScalarField,
 }
 

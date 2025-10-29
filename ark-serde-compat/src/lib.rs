@@ -4,12 +4,15 @@ use ark_ec::{AffineRepr as _, CurveGroup as _};
 use serde::{Serializer, de, ser::SerializeSeq as _};
 
 #[derive(Debug, thiserror::Error)]
-pub enum SerializationError {
+pub enum Error {
     #[error("invalid data")]
     InvalidData,
 }
 
-/// Serializes element of G1 using serializer
+pub fn serialize_bn254_fr<S: Serializer>(p: &ark_bn254::Fr, ser: S) -> Result<S::Ok, S::Error> {
+    ser.serialize_str(&p.to_string())
+}
+
 pub fn serialize_bn254_g1<S: Serializer>(
     p: &ark_bn254::G1Affine,
     ser: S,
@@ -22,7 +25,6 @@ pub fn serialize_bn254_g1<S: Serializer>(
     seq.end()
 }
 
-/// Serializes element of G2 using serializer
 pub fn serialize_bn254_g2<S: Serializer>(
     p: &ark_bn254::G2Affine,
     ser: S,
@@ -58,14 +60,14 @@ pub fn serialize_babyjubjub_affine_sequence<S: Serializer>(
     seq.end()
 }
 
-pub fn serialize_babyjubjub_scalar<S: Serializer>(
+pub fn serialize_babyjubjub_fr<S: Serializer>(
     p: &taceo_ark_babyjubjub::Fr,
     ser: S,
 ) -> Result<S::Ok, S::Error> {
     ser.serialize_str(&p.to_string())
 }
 
-pub fn serialize_babyjubjub_base<S: Serializer>(
+pub fn serialize_babyjubjub_fq<S: Serializer>(
     p: &taceo_ark_babyjubjub::Fq,
     ser: S,
 ) -> Result<S::Ok, S::Error> {
@@ -108,7 +110,7 @@ pub fn serialize_bn254_g1_sequence<S: Serializer>(
     seq.end()
 }
 
-pub fn serialize_babyjubjub_base_sequence<S: Serializer>(
+pub fn serialize_babyjubjub_fq_sequence<S: Serializer>(
     ps: &[taceo_ark_babyjubjub::Fq],
     ser: S,
 ) -> Result<S::Ok, S::Error> {
@@ -117,6 +119,22 @@ pub fn serialize_babyjubjub_base_sequence<S: Serializer>(
         seq.serialize_element(&p.to_string())?;
     }
     seq.end()
+}
+
+fn g1_to_strings_projective(p: &ark_bn254::G1Affine) -> Vec<String> {
+    if let Some((x, y)) = p.xy() {
+        vec![x.to_string(), y.to_string(), "1".to_owned()]
+    } else {
+        //point at infinity
+        vec!["0".to_owned(), "1".to_owned(), "0".to_owned()]
+    }
+}
+
+pub fn deserialize_bn254_fr<'de, D>(deserializer: D) -> Result<ark_bn254::Fr, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    deserializer.deserialize_str(BabyBn254FrVisitor)
 }
 
 pub fn deserialize_bn254_g1<'de, D>(deserializer: D) -> Result<ark_bn254::G1Affine, D::Error>
@@ -161,22 +179,22 @@ where
     Ok(seq.try_into().expect("provided len 7"))
 }
 
-pub fn deserialize_babyjubjub_scalar<'de, D>(
+pub fn deserialize_babyjubjub_fr<'de, D>(
     deserializer: D,
 ) -> Result<taceo_ark_babyjubjub::Fr, D::Error>
 where
     D: de::Deserializer<'de>,
 {
-    deserializer.deserialize_str(BabyJubJubScalarVisitor)
+    deserializer.deserialize_str(BabyJubJubFrVisitor)
 }
 
-pub fn deserialize_babyjubjub_base<'de, D>(
+pub fn deserialize_babyjubjub_fq<'de, D>(
     deserializer: D,
 ) -> Result<taceo_ark_babyjubjub::Fq, D::Error>
 where
     D: de::Deserializer<'de>,
 {
-    deserializer.deserialize_str(BabyJubJubBaseVisitor)
+    deserializer.deserialize_str(BabyJubJubFqVisitor)
 }
 
 pub fn deserialize_bn254_gt<'de, D>(deserializer: D) -> Result<ark_bn254::Fq12, D::Error>
@@ -195,41 +213,28 @@ where
     deserializer.deserialize_seq(Bn254G1SeqVisitor)
 }
 
-pub fn deserialize_babyjubjub_base_sequence<'de, D>(
+pub fn deserialize_babyjubjub_fq_sequence<'de, D>(
     deserializer: D,
 ) -> Result<Vec<taceo_ark_babyjubjub::Fq>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
-    deserializer.deserialize_seq(BabyJubJubBaseSeqVisitor)
+    deserializer.deserialize_seq(BabyJubJubFqSeqVisitor)
 }
 
-fn g1_to_strings_projective(p: &ark_bn254::G1Affine) -> Vec<String> {
-    if let Some((x, y)) = p.xy() {
-        vec![x.to_string(), y.to_string(), "1".to_owned()]
-    } else {
-        //point at infinity
-        vec!["0".to_owned(), "1".to_owned(), "0".to_owned()]
-    }
-}
-
-fn g1_from_strings_projective(
-    x: &str,
-    y: &str,
-    z: &str,
-) -> Result<ark_bn254::G1Affine, SerializationError> {
-    let x = ark_bn254::Fq::from_str(x).map_err(|_| SerializationError::InvalidData)?;
-    let y = ark_bn254::Fq::from_str(y).map_err(|_| SerializationError::InvalidData)?;
-    let z = ark_bn254::Fq::from_str(z).map_err(|_| SerializationError::InvalidData)?;
+fn g1_from_strings_projective(x: &str, y: &str, z: &str) -> Result<ark_bn254::G1Affine, Error> {
+    let x = ark_bn254::Fq::from_str(x).map_err(|_| Error::InvalidData)?;
+    let y = ark_bn254::Fq::from_str(y).map_err(|_| Error::InvalidData)?;
+    let z = ark_bn254::Fq::from_str(z).map_err(|_| Error::InvalidData)?;
     let p = ark_bn254::G1Projective::new_unchecked(x, y, z).into_affine();
     if p.is_zero() {
         return Ok(p);
     }
     if !p.is_on_curve() {
-        return Err(SerializationError::InvalidData);
+        return Err(Error::InvalidData);
     }
     if !p.is_in_correct_subgroup_assuming_on_curve() {
-        return Err(SerializationError::InvalidData);
+        return Err(Error::InvalidData);
     }
     Ok(p)
 }
@@ -241,13 +246,13 @@ fn g2_from_strings_projective(
     y1: &str,
     z0: &str,
     z1: &str,
-) -> Result<ark_bn254::G2Affine, SerializationError> {
-    let x0 = ark_bn254::Fq::from_str(x0).map_err(|_| SerializationError::InvalidData)?;
-    let x1 = ark_bn254::Fq::from_str(x1).map_err(|_| SerializationError::InvalidData)?;
-    let y0 = ark_bn254::Fq::from_str(y0).map_err(|_| SerializationError::InvalidData)?;
-    let y1 = ark_bn254::Fq::from_str(y1).map_err(|_| SerializationError::InvalidData)?;
-    let z0 = ark_bn254::Fq::from_str(z0).map_err(|_| SerializationError::InvalidData)?;
-    let z1 = ark_bn254::Fq::from_str(z1).map_err(|_| SerializationError::InvalidData)?;
+) -> Result<ark_bn254::G2Affine, Error> {
+    let x0 = ark_bn254::Fq::from_str(x0).map_err(|_| Error::InvalidData)?;
+    let x1 = ark_bn254::Fq::from_str(x1).map_err(|_| Error::InvalidData)?;
+    let y0 = ark_bn254::Fq::from_str(y0).map_err(|_| Error::InvalidData)?;
+    let y1 = ark_bn254::Fq::from_str(y1).map_err(|_| Error::InvalidData)?;
+    let z0 = ark_bn254::Fq::from_str(z0).map_err(|_| Error::InvalidData)?;
+    let z1 = ark_bn254::Fq::from_str(z1).map_err(|_| Error::InvalidData)?;
 
     let x = ark_bn254::Fq2::new(x0, x1);
     let y = ark_bn254::Fq2::new(y0, y1);
@@ -257,10 +262,10 @@ fn g2_from_strings_projective(
         return Ok(p);
     }
     if !p.is_on_curve() {
-        return Err(SerializationError::InvalidData);
+        return Err(Error::InvalidData);
     }
     if !p.is_in_correct_subgroup_assuming_on_curve() {
-        return Err(SerializationError::InvalidData);
+        return Err(Error::InvalidData);
     }
     Ok(p)
 }
@@ -268,20 +273,37 @@ fn g2_from_strings_projective(
 fn babyjubjub_affine_from_strings(
     x: &str,
     y: &str,
-) -> Result<taceo_ark_babyjubjub::EdwardsAffine, SerializationError> {
-    let x = taceo_ark_babyjubjub::Fq::from_str(x).map_err(|_| SerializationError::InvalidData)?;
-    let y = taceo_ark_babyjubjub::Fq::from_str(y).map_err(|_| SerializationError::InvalidData)?;
+) -> Result<taceo_ark_babyjubjub::EdwardsAffine, Error> {
+    let x = taceo_ark_babyjubjub::Fq::from_str(x).map_err(|_| Error::InvalidData)?;
+    let y = taceo_ark_babyjubjub::Fq::from_str(y).map_err(|_| Error::InvalidData)?;
     let p = taceo_ark_babyjubjub::EdwardsAffine::new_unchecked(x, y);
     if p.is_zero() {
         return Ok(p);
     }
     if !p.is_on_curve() {
-        return Err(SerializationError::InvalidData);
+        return Err(Error::InvalidData);
     }
     if !p.is_in_correct_subgroup_assuming_on_curve() {
-        return Err(SerializationError::InvalidData);
+        return Err(Error::InvalidData);
     }
     Ok(p)
+}
+
+struct BabyBn254FrVisitor;
+
+impl<'de> de::Visitor<'de> for BabyBn254FrVisitor {
+    type Value = ark_bn254::Fr;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a sting representing a bn254 Fr element")
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        ark_bn254::Fr::from_str(v).map_err(|_| E::custom("Invalid data"))
+    }
 }
 
 struct Bn254G1Visitor;
@@ -364,13 +386,13 @@ impl<'de> de::Visitor<'de> for Bn254G2Visitor {
     }
 }
 
-struct BabyJubJubScalarVisitor;
+struct BabyJubJubFrVisitor;
 
-impl<'de> de::Visitor<'de> for BabyJubJubScalarVisitor {
+impl<'de> de::Visitor<'de> for BabyJubJubFrVisitor {
     type Value = taceo_ark_babyjubjub::Fr;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("a sting representing a babyjubjub scalar field point")
+        formatter.write_str("a sting representing a babyjubjub Fr element")
     }
 
     fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
@@ -381,13 +403,13 @@ impl<'de> de::Visitor<'de> for BabyJubJubScalarVisitor {
     }
 }
 
-struct BabyJubJubBaseVisitor;
+struct BabyJubJubFqVisitor;
 
-impl<'de> de::Visitor<'de> for BabyJubJubBaseVisitor {
+impl<'de> de::Visitor<'de> for BabyJubJubFqVisitor {
     type Value = taceo_ark_babyjubjub::Fq;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("a sting representing a babyjubjub base field point")
+        formatter.write_str("a sting representing a babyjubjub Fq point")
     }
 
     fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
@@ -469,11 +491,9 @@ impl<'de> de::Visitor<'de> for Bn254GtVisitor {
 }
 
 #[inline]
-fn cubic_extension_field_from_vec(
-    strings: Vec<Vec<String>>,
-) -> Result<ark_bn254::Fq6, SerializationError> {
+fn cubic_extension_field_from_vec(strings: Vec<Vec<String>>) -> Result<ark_bn254::Fq6, Error> {
     if strings.len() != 3 {
-        Err(SerializationError::InvalidData)
+        Err(Error::InvalidData)
     } else {
         let c0 = quadratic_extension_field_from_vec(&strings[0])?;
         let c1 = quadratic_extension_field_from_vec(&strings[1])?;
@@ -483,16 +503,12 @@ fn cubic_extension_field_from_vec(
 }
 
 #[inline]
-fn quadratic_extension_field_from_vec(
-    strings: &[String],
-) -> Result<ark_bn254::Fq2, SerializationError> {
+fn quadratic_extension_field_from_vec(strings: &[String]) -> Result<ark_bn254::Fq2, Error> {
     if strings.len() != 2 {
-        Err(SerializationError::InvalidData)
+        Err(Error::InvalidData)
     } else {
-        let c0 =
-            ark_bn254::Fq::from_str(&strings[0]).map_err(|_| SerializationError::InvalidData)?;
-        let c1 =
-            ark_bn254::Fq::from_str(&strings[1]).map_err(|_| SerializationError::InvalidData)?;
+        let c0 = ark_bn254::Fq::from_str(&strings[0]).map_err(|_| Error::InvalidData)?;
+        let c1 = ark_bn254::Fq::from_str(&strings[1]).map_err(|_| Error::InvalidData)?;
         Ok(ark_bn254::Fq2::new(c0, c1))
     }
 }
@@ -529,13 +545,13 @@ impl<'de> de::Visitor<'de> for Bn254G1SeqVisitor {
     }
 }
 
-struct BabyJubJubBaseSeqVisitor;
+struct BabyJubJubFqSeqVisitor;
 
-impl<'de> de::Visitor<'de> for BabyJubJubBaseSeqVisitor {
+impl<'de> de::Visitor<'de> for BabyJubJubFqSeqVisitor {
     type Value = Vec<taceo_ark_babyjubjub::Fq>;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("a sequence of elements representing babyjubjub scalar points.")
+        formatter.write_str("a sequence of elements representing babyjubjub Fq points.")
     }
 
     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
