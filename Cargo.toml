@@ -29,7 +29,7 @@ blake3 = "1"
 eyre = "0.6"
 num-bigint = "0.4"
 num-traits = "0.2"
-rand = "0.8"
+rand = "0.9"
 serde = { version = "1" }
 taceo-ark-babyjubjub = { version = "0.5", path = "ark-babyjubjub" }
 taceo-ark-serde-compat = { version = "0.1", path = "ark-serde-compat" }
