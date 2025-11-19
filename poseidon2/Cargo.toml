@@ -1,14 +1,18 @@
 [package]
 name = "taceo-poseidon2"
 version = "0.1.0"
+authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-authors.workspace = true
+description = "Poseidon2 permutation for BN254 curve."
+readme = "./README.md"
 repository.workspace = true
 license.workspace = true
 publish = true
-readme = "./README.md"
-description = "Poseidon2 hash function implementation for BN254 curve."
+
+[[bench]]
+harness = false
+name = "poseidon2"
 
 [dependencies]
 ark-bn254.workspace = true
@@ -19,7 +23,3 @@ num-traits.workspace = true
 
 [dev-dependencies]
 criterion = "0.7"
-
-[[bench]]
-name = "poseidon2"
-harness = false

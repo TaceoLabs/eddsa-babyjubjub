@@ -7,7 +7,6 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use num_bigint::BigUint;
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
-use taceo_poseidon2::Poseidon2;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 type ScalarField = taceo_ark_babyjubjub::Fr;
@@ -214,8 +213,7 @@ impl EdDSASignature {
 }
 
 fn challenge_hash(message: BaseField, nonce_r: Affine, pk: Affine) -> BaseField {
-    let poseidon2_8 = Poseidon2::<_, 8, 5>::default();
-    poseidon2_8.permutation(&[
+    taceo_poseidon2::t8_permutation(&[
         EdDSASignature::get_chall_ds(), // Domain separator in capacity element
         nonce_r.x,
         nonce_r.y,
@@ -235,11 +233,10 @@ pub(crate) fn convert_base_to_scalar(f: BaseField) -> ScalarField {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use ark_ec::AffineRepr;
     use ark_ff::UniformRand;
-    use taceo_poseidon2::field_from_hex_string;
-
-    use super::*;
+    use std::str::FromStr;
 
     fn test(sk: [u8; 32], message: BaseField, rng: &mut impl rand::Rng) {
         let sk = EdDSAPrivateKey::from_bytes(sk);
@@ -289,8 +286,8 @@ mod tests {
     fn test_eddsa_kat0() {
         let mut rng = rand::thread_rng();
         let sk = b"11e822de29de9aef648b12049368633f";
-        let message = field_from_hex_string::<BaseField>(
-            "0x6e94c93c5fc8c67e9f18200f4f963aa73fe45071d441362d17ede7e84fa0dd9",
+        let message = BaseField::from_str(
+            "3126080974277891902445700130528654565374341115115698716199527644337840721369",
         )
         .unwrap();
         test(*sk, message, &mut rng);
@@ -300,8 +297,8 @@ mod tests {
     fn test_eddsa_kat1() {
         let mut rng = rand::thread_rng();
         let sk = b"1cc01b8ddd6851915a42e0cfc6b7088c";
-        let message = field_from_hex_string::<BaseField>(
-            "0x671e7802b9c4f1165955b9477a378bf30fd5723fddf7e727934bf2a7c2f3265",
+        let message = BaseField::from_str(
+            "2915128568691568051790179173058040565240368703618887264694651479943038317157",
         )
         .unwrap();
         test(*sk, message, &mut rng);
@@ -310,8 +307,8 @@ mod tests {
     #[test]
     fn test_encoding_roundtrip() {
         let sk = b"1cc01b8ddd6851915a42e0cfc6b7088c";
-        let message = field_from_hex_string::<BaseField>(
-            "0x671e7802b9c4f1165955b9477a378bf30fd5723fddf7e727934bf2a7c2f3265",
+        let message = BaseField::from_str(
+            "2915128568691568051790179173058040565240368703618887264694651479943038317157",
         )
         .unwrap();
         let signature = EdDSAPrivateKey::from_bytes(*sk).sign(message);
