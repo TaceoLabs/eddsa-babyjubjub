@@ -2,14 +2,6 @@
 
 ## [Unreleased]
 
-## [0.2.1](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-poseidon2-v0.2.0...taceo-poseidon2-v0.2.1)
-
-### ⚙️ Miscellaneous Tasks
-
-
-- Update Cargo.toml dependencies - ([0000000](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/0000000))
-
-
 ## [0.2.0](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-poseidon2-v0.1.0...taceo-poseidon2-v0.2.0)
 
 ### 🚜 Refactor
