@@ -2,7 +2,6 @@
 resolver = "3"
 members = [
   "ark-babyjubjub",
-  "ark-serde-compat",
   "eddsa-babyjubjub",
   "poseidon2",
 ]
@@ -18,13 +17,15 @@ ark-algebra-test-templates = "0.5"
 ark-babyjubjub = { package = "taceo-ark-babyjubjub", path = "ark-babyjubjub", version = "0.5" }
 ark-bn254 = { version = "0.5" }
 ark-curve-constraint-tests = "0.5"
-ark-ec = "0.5"
-ark-ff = "0.5"
-ark-groth16 = "0.5"
-ark-r1cs-std = { version = "0.5" }
-ark-relations = "0.5"
-ark-serde-compat = { package = "taceo-ark-serde-compat", path = "ark-serde-compat", version = "0.1" }
-ark-serialize = "0.5"
+ark-ec = { version = "0.5", default-features = false }
+ark-ff = { version = "0.5", default-features = false }
+ark-groth16 = { version = "0.5", default-features = false }
+ark-r1cs-std = { version = "0.5", default-features = false }
+ark-relations = { version = "0.5", default-features = false }
+ark-serde-compat = { package = "taceo-ark-serde-compat", version = "0.2", default-features = false, features = [
+  "babyjubjub"
+] }
+ark-serialize = { version = "0.5", default-features = false }
 ark-std = "0.5"
 blake3 = "1"
 eyre = "0.6"
