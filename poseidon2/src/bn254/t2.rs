@@ -1,5 +1,7 @@
-/// Parameters are compatible with the original Poseidon2 parameter generation script found at:
-/// [https://github.com/HorizenLabs/poseidon2/blob/main/poseidon2_rust_params.sage](https://github.com/HorizenLabs/poseidon2/blob/main/poseidon2_rust_params.sage)
+//! Poseidon2 implementation for `t=2`.
+//!
+//! Parameters are compatible with the original Poseidon2 parameter generation script found at:
+//! [https://github.com/HorizenLabs/poseidon2/blob/main/poseidon2_rust_params.sage](https://github.com/HorizenLabs/poseidon2/blob/main/poseidon2_rust_params.sage)
 use ark_ff::MontFp;
 
 use crate::perm::Poseidon2Permutation;
@@ -121,7 +123,7 @@ pub(crate) const POSEIDON2_BN254_T2_PARAMS: Poseidon2Permutation<Scalar, T, D, R
 ///
 /// # Returns
 /// A permuted state as `[ark_bn254::Fr; 2]`.
-pub fn t2_permutation(state: &[ark_bn254::Fr; 2]) -> [ark_bn254::Fr; 2] {
+pub fn permutation(state: &[ark_bn254::Fr; 2]) -> [ark_bn254::Fr; 2] {
     POSEIDON2_BN254_T2_PARAMS.permutation(state)
 }
 
@@ -131,6 +133,40 @@ pub fn t2_permutation(state: &[ark_bn254::Fr; 2]) -> [ark_bn254::Fr; 2] {
 ///
 /// # Arguments
 /// * `state` - A mutable reference to the state array (`[ark_bn254::Fr; 2]`).
-pub fn t2_permutation_in_place(state: &mut [ark_bn254::Fr; 2]) {
+pub fn permutation_in_place(state: &mut [ark_bn254::Fr; 2]) {
     POSEIDON2_BN254_T2_PARAMS.permutation_in_place(state)
+}
+
+#[cfg(test)]
+mod tests {
+
+    use crate::bn254::{
+        t2::POSEIDON2_BN254_T2_PARAMS,
+        test::{TESTRUNS, poseidon2_consistent_perm, poseidon2_kat},
+    };
+    use std::str::FromStr;
+
+    #[test]
+    fn poseidon2_bn254_t2_consistent_perm() {
+        for _ in 0..TESTRUNS {
+            poseidon2_consistent_perm(&POSEIDON2_BN254_T2_PARAMS);
+        }
+    }
+
+    #[test]
+    fn poseidon2_bn254_t2_kat1() {
+        let input = [ark_bn254::Fr::from(0u64), ark_bn254::Fr::from(1u64)];
+        let expected = [
+            ark_bn254::Fr::from_str(
+                "13120422956170837922441672802975889424559262309139960702680326932494325745547",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "5923567162677888564808904842769941181302763723060647224839027357562627386465",
+            )
+            .unwrap(),
+        ];
+
+        poseidon2_kat(&POSEIDON2_BN254_T2_PARAMS, &input, &expected);
+    }
 }

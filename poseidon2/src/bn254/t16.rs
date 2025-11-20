@@ -1,5 +1,7 @@
-/// Parameters are compatible with the original Poseidon2 parameter generation script found at:
-/// [https://github.com/HorizenLabs/poseidon2/blob/main/poseidon2_rust_params.sage](https://github.com/HorizenLabs/poseidon2/blob/main/poseidon2_rust_params.sage)
+//! Poseidon2 implementation for `t=16`.
+//!
+//! Parameters are compatible with the original Poseidon2 parameter generation script found at:
+//! [https://github.com/HorizenLabs/poseidon2/blob/main/poseidon2_rust_params.sage](https://github.com/HorizenLabs/poseidon2/blob/main/poseidon2_rust_params.sage)
 use ark_ff::MontFp;
 
 use crate::perm::Poseidon2Permutation;
@@ -255,7 +257,7 @@ pub(crate) const POSEIDON2_BN254_T16_PARAMS: Poseidon2Permutation<
 ///
 /// # Returns
 /// A permuted state as `[ark_bn254::Fr; 16]`.
-pub fn t16_permutation(state: &[ark_bn254::Fr; 16]) -> [ark_bn254::Fr; 16] {
+pub fn permutation(state: &[ark_bn254::Fr; 16]) -> [ark_bn254::Fr; 16] {
     POSEIDON2_BN254_T16_PARAMS.permutation(state)
 }
 
@@ -265,6 +267,96 @@ pub fn t16_permutation(state: &[ark_bn254::Fr; 16]) -> [ark_bn254::Fr; 16] {
 ///
 /// # Arguments
 /// * `state` - A mutable reference to the state array (`[ark_bn254::Fr; 16]`).
-pub fn t16_permutation_in_place(state: &mut [ark_bn254::Fr; 16]) {
+pub fn permutation_in_place(state: &mut [ark_bn254::Fr; 16]) {
     POSEIDON2_BN254_T16_PARAMS.permutation_in_place(state)
+}
+
+#[cfg(test)]
+mod tests {
+
+    use crate::bn254::{
+        t16::POSEIDON2_BN254_T16_PARAMS,
+        test::{TESTRUNS, poseidon2_consistent_perm, poseidon2_kat},
+    };
+    use std::str::FromStr;
+    #[test]
+    fn poseidon2_bn254_t16_consistent_perm() {
+        for _ in 0..TESTRUNS {
+            poseidon2_consistent_perm(&POSEIDON2_BN254_T16_PARAMS);
+        }
+    }
+    #[test]
+    fn poseidon2_bn254_t16_kat1() {
+        // Parameters are compatible with the original Poseidon2 parameter generation script found at:
+        // [https://github.com/HorizenLabs/poseidon2/blob/main/poseidon2_rust_params.sage](https://github.com/HorizenLabs/poseidon2/blob/main/poseidon2_rust_params.sage)
+        let input = std::array::from_fn(|i| ark_bn254::Fr::from(i as u64));
+        let expected = [
+            ark_bn254::Fr::from_str(
+                "7129053404014098913941583447102076532611276040718594073862066403012892177215",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "5458683216916715697310099658604278457911373519210593239261146303695981710820",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "11764907654416682971926471140388165312909351793032868507449176373009888376893",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "17363012907147515824232626923071954964539976031233523938322583063167173991942",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "16754602647566413012759386310550362661092317428428132757066277153406453157400",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "10442131742273378767812305849732860137449534508695657144865044457198204305243",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "13315916208806700309353847107954103794241355430909228633658159683794835480566",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "14675611827802190925530581036356245293764500457751312643178429199155385431971",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "3800671750689110886099899395588427301982955036566905831860793275457528754896",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "863058427093450397617252284543198432424871511785791089866952153042503171268",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "16110421480974327191214802248220528120081914075253666769021797524181818259452",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "3050248777345249982082587219460801555485024010345812479213241978893548171998",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "8005144369031495385854140476761376792991595443174132540148616210767138457404",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "193712991007063517677674367979478243863141973963118958643316643360558925992",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "6765341258738133397733055933640609905610288576122407133007925535267189590216",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "6411743912316957490668095751870764077217660758836562678571866082387292213586",
+            )
+            .unwrap(),
+        ];
+
+        poseidon2_kat(&POSEIDON2_BN254_T16_PARAMS, &input, &expected);
+    }
 }
