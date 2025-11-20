@@ -1,6 +1,6 @@
 [package]
 name = "taceo-eddsa-babyjubjub"
-version = "0.6.0"
+version = "0.5.1"
 edition.workspace = true
 rust-version.workspace = true
 description = "An EdDSA signature scheme implementation over the Baby Jubjub elliptic curve using Poseidon2, useful for SNARK-friendliness."
