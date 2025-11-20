@@ -5,6 +5,7 @@ use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{AdditiveGroup, BigInteger, PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use num_bigint::BigUint;
+use poseidon2::Poseidon2;
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -112,8 +113,8 @@ impl EdDSAPrivateKey {
 /// A public key for the EdDSA signature scheme over the BabyJubJubCurve.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EdDSAPublicKey {
-    #[serde(serialize_with = "ark_serde_compat::serialize_babyjubjub_affine")]
-    #[serde(deserialize_with = "ark_serde_compat::deserialize_babyjubjub_affine")]
+    #[serde(serialize_with = "ark_serde_compat::babyjubjub::serialize_affine")]
+    #[serde(deserialize_with = "ark_serde_compat::babyjubjub::deserialize_affine")]
     pub pk: Affine,
 }
 
@@ -178,11 +179,11 @@ impl EdDSAPublicKey {
 /// An EdDSA signature on the Baby Jubjub curve, using Poseidon2 as the internal hash function for the Fiat-Shamir transform.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EdDSASignature {
-    #[serde(serialize_with = "ark_serde_compat::serialize_babyjubjub_affine")]
-    #[serde(deserialize_with = "ark_serde_compat::deserialize_babyjubjub_affine")]
+    #[serde(serialize_with = "ark_serde_compat::babyjubjub::serialize_affine")]
+    #[serde(deserialize_with = "ark_serde_compat::babyjubjub::deserialize_affine")]
     pub r: Affine,
-    #[serde(serialize_with = "ark_serde_compat::serialize_babyjubjub_fr")]
-    #[serde(deserialize_with = "ark_serde_compat::deserialize_babyjubjub_fr")]
+    #[serde(serialize_with = "ark_serde_compat::serialize_f")]
+    #[serde(deserialize_with = "ark_serde_compat::deserialize_f")]
     pub s: ScalarField,
 }
 
@@ -236,7 +237,13 @@ mod tests {
     use super::*;
     use ark_ec::AffineRepr;
     use ark_ff::UniformRand;
+<<<<<<< HEAD
     use std::str::FromStr;
+=======
+    use poseidon2::field_from_hex_string;
+
+    use super::*;
+>>>>>>> cd0f23b (build(deps): updated ark-serde-compat dep)
 
     fn test(sk: [u8; 32], message: BaseField, rng: &mut impl rand::Rng) {
         let sk = EdDSAPrivateKey::from_bytes(sk);
