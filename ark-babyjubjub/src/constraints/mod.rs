@@ -1,4 +1,4 @@
-//! This module implements the R1CS equivalent of `taceo_ark_babyjubjub`.
+//! This module implements the R1CS equivalent of `ark_babyjubjub`.
 //!
 //! It implements field variables for `crate::Fq`,
 //! and group variables for `crate::Projective`.

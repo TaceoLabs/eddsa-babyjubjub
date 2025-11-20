@@ -10,7 +10,7 @@ license.workspace = true
 publish = true
 
 [dependencies]
-ark-babyjubjub = { workspace = true }
+ark-babyjubjub = { package = "taceo-ark-babyjubjub", version = "0.5" }
 ark-ec = { workspace = true }
 ark-ff = { workspace = true }
 ark-serde-compat = { workspace = true }

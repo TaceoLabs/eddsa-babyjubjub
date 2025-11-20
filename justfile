@@ -10,6 +10,6 @@ lint:
     RUSTDOCFLAGS='-D warnings' cargo all-features doc --workspace -q --no-deps
 
 test:
-    cargo test --all-features --all-targets
+    cargo test --workspace --profile ci-dev --all-features --all-targets
 
 check-pr: lint test

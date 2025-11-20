@@ -112,8 +112,8 @@ impl EdDSAPrivateKey {
 /// A public key for the EdDSA signature scheme over the BabyJubJubCurve.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EdDSAPublicKey {
-    #[serde(serialize_with = "ark_serde_compat::serialize_babyjubjub_affine")]
-    #[serde(deserialize_with = "ark_serde_compat::deserialize_babyjubjub_affine")]
+    #[serde(serialize_with = "ark_serde_compat::babyjubjub::serialize_affine")]
+    #[serde(deserialize_with = "ark_serde_compat::babyjubjub::deserialize_affine")]
     pub pk: Affine,
 }
 
@@ -178,11 +178,11 @@ impl EdDSAPublicKey {
 /// An EdDSA signature on the Baby Jubjub curve, using Poseidon2 as the internal hash function for the Fiat-Shamir transform.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EdDSASignature {
-    #[serde(serialize_with = "ark_serde_compat::serialize_babyjubjub_affine")]
-    #[serde(deserialize_with = "ark_serde_compat::deserialize_babyjubjub_affine")]
+    #[serde(serialize_with = "ark_serde_compat::babyjubjub::serialize_affine")]
+    #[serde(deserialize_with = "ark_serde_compat::babyjubjub::deserialize_affine")]
     pub r: Affine,
-    #[serde(serialize_with = "ark_serde_compat::serialize_babyjubjub_fr")]
-    #[serde(deserialize_with = "ark_serde_compat::deserialize_babyjubjub_fr")]
+    #[serde(serialize_with = "ark_serde_compat::serialize_f")]
+    #[serde(deserialize_with = "ark_serde_compat::deserialize_f")]
     pub s: ScalarField,
 }
 
