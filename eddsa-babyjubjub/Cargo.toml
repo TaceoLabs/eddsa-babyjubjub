@@ -3,23 +3,22 @@ name = "taceo-eddsa-babyjubjub"
 version = "0.5.0"
 edition.workspace = true
 rust-version.workspace = true
-authors.workspace = true
+description = "An EdDSA signature scheme implementation over the Baby Jubjub elliptic curve using Poseidon2, useful for SNARK-friendliness."
+readme = "./README.md"
 repository.workspace = true
 license.workspace = true
-readme = "./README.md"
 publish = true
-description = "An EdDSA signature scheme implementation over the Baby Jubjub elliptic curve using Poseidon2, useful for SNARK-friendliness."
 
 [dependencies]
+ark-babyjubjub = { workspace = true }
 ark-ec = { workspace = true }
 ark-ff = { workspace = true }
+ark-serde-compat = { workspace = true }
 ark-serialize = { workspace = true }
 blake3 = { workspace = true }
 eyre = { workspace = true }
 num-bigint.workspace = true
+poseidon2 = { workspace = true, features = ["bn254", "t8"] }
 rand = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-taceo-ark-serde-compat = { workspace = true }
-taceo-ark-babyjubjub = { workspace = true }
-taceo-poseidon2 = { workspace = true }
 zeroize = { workspace = true }

@@ -8,7 +8,6 @@ members = [
 ]
 
 [workspace.package]
-authors = ["TACEO <devs@taceo.io>"]
 edition = "2024"
 rust-version = "1.86"
 repository = "https://github.com/TaceoLabs/eddsa-babyjubjub"
@@ -16,6 +15,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 ark-algebra-test-templates = "0.5"
+ark-babyjubjub = { package = "taceo-ark-babyjubjub", path = "ark-babyjubjub", version = "0.5" }
 ark-bn254 = { version = "0.5" }
 ark-curve-constraint-tests = "0.5"
 ark-ec = "0.5"
@@ -23,17 +23,16 @@ ark-ff = "0.5"
 ark-groth16 = "0.5"
 ark-r1cs-std = { version = "0.5" }
 ark-relations = "0.5"
+ark-serde-compat = { package = "taceo-ark-serde-compat", path = "ark-serde-compat", version = "0.1" }
 ark-serialize = "0.5"
 ark-std = "0.5"
 blake3 = "1"
 eyre = "0.6"
 num-bigint = "0.4"
 num-traits = "0.2"
+poseidon2 = { package = "taceo-poseidon2", path = "poseidon2", version = "0.1", default-features = false }
 rand = "0.8"
 serde = { version = "1" }
-taceo-ark-babyjubjub = { path = "ark-babyjubjub", version = "0.5" }
-taceo-ark-serde-compat = { path = "ark-serde-compat", version = "0.1" }
-taceo-poseidon2 = { path = "poseidon2", version = "0.1" }
 thiserror = "2"
 zeroize = "1"
 

@@ -9,9 +9,9 @@ use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-type ScalarField = taceo_ark_babyjubjub::Fr;
-type BaseField = taceo_ark_babyjubjub::Fq;
-type Affine = taceo_ark_babyjubjub::EdwardsAffine;
+type ScalarField = ark_babyjubjub::Fr;
+type BaseField = ark_babyjubjub::Fq;
+type Affine = ark_babyjubjub::EdwardsAffine;
 
 /// A private key for the EdDSA signature scheme.
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
@@ -112,8 +112,8 @@ impl EdDSAPrivateKey {
 /// A public key for the EdDSA signature scheme over the BabyJubJubCurve.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EdDSAPublicKey {
-    #[serde(serialize_with = "taceo_ark_serde_compat::serialize_babyjubjub_affine")]
-    #[serde(deserialize_with = "taceo_ark_serde_compat::deserialize_babyjubjub_affine")]
+    #[serde(serialize_with = "ark_serde_compat::serialize_babyjubjub_affine")]
+    #[serde(deserialize_with = "ark_serde_compat::deserialize_babyjubjub_affine")]
     pub pk: Affine,
 }
 
@@ -178,11 +178,11 @@ impl EdDSAPublicKey {
 /// An EdDSA signature on the Baby Jubjub curve, using Poseidon2 as the internal hash function for the Fiat-Shamir transform.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EdDSASignature {
-    #[serde(serialize_with = "taceo_ark_serde_compat::serialize_babyjubjub_affine")]
-    #[serde(deserialize_with = "taceo_ark_serde_compat::deserialize_babyjubjub_affine")]
+    #[serde(serialize_with = "ark_serde_compat::serialize_babyjubjub_affine")]
+    #[serde(deserialize_with = "ark_serde_compat::deserialize_babyjubjub_affine")]
     pub r: Affine,
-    #[serde(serialize_with = "taceo_ark_serde_compat::serialize_babyjubjub_fr")]
-    #[serde(deserialize_with = "taceo_ark_serde_compat::deserialize_babyjubjub_fr")]
+    #[serde(serialize_with = "ark_serde_compat::serialize_babyjubjub_fr")]
+    #[serde(deserialize_with = "ark_serde_compat::deserialize_babyjubjub_fr")]
     pub s: ScalarField,
 }
 
@@ -213,7 +213,7 @@ impl EdDSASignature {
 }
 
 fn challenge_hash(message: BaseField, nonce_r: Affine, pk: Affine) -> BaseField {
-    taceo_poseidon2::t8_permutation(&[
+    poseidon2::bn254::t8::permutation(&[
         EdDSASignature::get_chall_ds(), // Domain separator in capacity element
         nonce_r.x,
         nonce_r.y,
