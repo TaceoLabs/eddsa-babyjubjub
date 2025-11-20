@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.5.2](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-eddsa-babyjubjub-v0.5.1...taceo-eddsa-babyjubjub-v0.5.2)
+
+### Build
+
+
+- Removed ark-serde-compat crate - ([c0f306d](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/c0f306df06d6809d209cb414b8beb1290334b98b))
+
+
 ## [0.5.1](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-eddsa-babyjubjub-v0.5.0...taceo-eddsa-babyjubjub-v0.5.1)
 
 ### 🚜 Refactor
