@@ -49,23 +49,19 @@ impl TECurveConfig for EdwardsConfig {
     type MontCurveConfig = EdwardsConfig;
 
     /// We override this since the default implementation uses double-and-add and skips all leading zero bits of the scalar,
-    /// which is not constant time. While this implementation uses the same amount of instructions regardless of the scalar,
-    /// it has different branching patterns depending on the scalar bits. This means that it is potentially susceptible to
-    /// cache-timing attacks such as Flush+Reload.
+    /// which is not constant time. This implementation uses the same amount of instructions regardless of the scalar, at the cost of performance.
     fn mul_projective(base: &Projective<Self>, scalar: &[u64]) -> Projective<Self> {
         let mut r0 = Projective::<Self>::zero();
         let mut r1 = *base;
+        let mut prev_bit = false;
         for b in ark_ff::BitIteratorBE::new(scalar) {
-            if !b {
-                r1 += r0;
-                r0.double_in_place();
-            } else {
-                r0 += r1;
-                r1.double_in_place();
-            }
-            // invariant property to maintain correctness
-            debug_assert_eq!(r1, r0 + base);
+            let swap = prev_bit ^ b;
+            prev_bit = b;
+            conditional_swap(&mut r0, &mut r1, swap);
+            r1 += r0;
+            r0.double_in_place();
         }
+        conditional_select(&mut r0, &r1, prev_bit);
         r0
     }
 
@@ -94,3 +90,46 @@ pub const GENERATOR_X: Fq =
 /// 16950150798460657717958625567821834550301663161624707787222815936182638968203
 pub const GENERATOR_Y: Fq =
     MontFp!("16950150798460657717958625567821834550301663161624707787222815936182638968203");
+
+// Helper functions for constant-time conditional swap and select, used in the montgomery ladder implementation.
+#[inline(always)]
+fn conditional_swap(a: &mut EdwardsProjective, b: &mut EdwardsProjective, c: bool) {
+    let mask = (c as u64).wrapping_neg(); // all 1s if c is true, all 0s if c is false
+    conditional_swap_field(&mut a.x, &mut b.x, mask);
+    conditional_swap_field(&mut a.y, &mut b.y, mask);
+    conditional_swap_field(&mut a.z, &mut b.z, mask);
+    conditional_swap_field(&mut a.t, &mut b.t, mask);
+}
+
+#[inline(always)]
+fn conditional_select(a: &mut EdwardsProjective, b: &EdwardsProjective, c: bool) {
+    let mask = (c as u64).wrapping_neg(); // all 1s if c is true, all 0s if c is false
+    conditional_select_field(&mut a.x, b.x, mask);
+    conditional_select_field(&mut a.y, b.y, mask);
+    conditional_select_field(&mut a.z, b.z, mask);
+    conditional_select_field(&mut a.t, b.t, mask);
+}
+
+#[inline(always)]
+fn conditional_select_field(a: &mut Fq, b: Fq, mask: u64) {
+    a.0.0[0] ^= mask & (a.0.0[0] ^ b.0.0[0]);
+    a.0.0[1] ^= mask & (a.0.0[1] ^ b.0.0[1]);
+    a.0.0[2] ^= mask & (a.0.0[2] ^ b.0.0[2]);
+    a.0.0[3] ^= mask & (a.0.0[3] ^ b.0.0[3]);
+}
+
+#[inline(always)]
+fn conditional_swap_field(a: &mut Fq, b: &mut Fq, mask: u64) {
+    let swap = mask & (a.0.0[0] ^ b.0.0[0]);
+    a.0.0[0] ^= swap;
+    b.0.0[0] ^= swap;
+    let swap = mask & (a.0.0[1] ^ b.0.0[1]);
+    a.0.0[1] ^= swap;
+    b.0.0[1] ^= swap;
+    let swap = mask & (a.0.0[2] ^ b.0.0[2]);
+    a.0.0[2] ^= swap;
+    b.0.0[2] ^= swap;
+    let swap = mask & (a.0.0[3] ^ b.0.0[3]);
+    a.0.0[3] ^= swap;
+    b.0.0[3] ^= swap;
+}
