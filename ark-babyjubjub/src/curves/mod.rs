@@ -1,8 +1,9 @@
 use ark_ec::{
+    AdditiveGroup,
     models::CurveConfig,
     twisted_edwards::{Affine, MontCurveConfig, Projective, TECurveConfig},
 };
-use ark_ff::{Field, MontFp};
+use ark_ff::{Field, MontFp, Zero};
 
 use crate::{Fq, Fr};
 
@@ -46,6 +47,33 @@ impl TECurveConfig for EdwardsConfig {
     const GENERATOR: EdwardsAffine = EdwardsAffine::new_unchecked(GENERATOR_X, GENERATOR_Y);
 
     type MontCurveConfig = EdwardsConfig;
+
+    /// We override this since the default implementation uses double-and-add and skips all leading zero bits of the scalar,
+    /// which is not constant time. While this implementation uses the same amount of instructions regardless of the scalar,
+    /// it has different branching patterns depending on the scalar bits. This means that it is potentially susceptible to
+    /// cache-timing attacks such as Flush+Reload.
+    fn mul_projective(base: &Projective<Self>, scalar: &[u64]) -> Projective<Self> {
+        let mut r0 = Projective::<Self>::zero();
+        let mut r1 = *base;
+        for b in ark_ff::BitIteratorBE::new(scalar) {
+            if !b {
+                r1 += r0;
+                r0.double_in_place();
+            } else {
+                r0 += r1;
+                r1.double_in_place();
+            }
+            // invariant property to maintain correctness
+            debug_assert_eq!(r1, r0 + base);
+        }
+        r0
+    }
+
+    /// Also override mul_affine to use our constant-time mul_projective.
+    fn mul_affine(base: &Affine<Self>, scalar: &[u64]) -> Projective<Self> {
+        let base = Projective::<Self>::from(*base);
+        Self::mul_projective(&base, scalar)
+    }
 }
 
 impl MontCurveConfig for EdwardsConfig {
