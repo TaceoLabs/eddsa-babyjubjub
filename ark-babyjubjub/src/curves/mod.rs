@@ -39,11 +39,6 @@ impl TECurveConfig for EdwardsConfig {
     /// COEFF_A = 168700
     const COEFF_A: Fq = MontFp!("168700");
 
-    #[inline(always)]
-    fn mul_by_a(elem: Self::BaseField) -> Self::BaseField {
-        elem * <Self as TECurveConfig>::COEFF_A
-    }
-
     /// COEFF_D = 168696
     const COEFF_D: Fq = MontFp!("168696");
 
