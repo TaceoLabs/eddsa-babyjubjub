@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-poseidon2-v0.2.0...taceo-poseidon2-v0.2.1)
+
+### ⚙️ Miscellaneous Tasks
+
+
+- Promote some asserts to compile time - ([1d342ca](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/1d342ca2d42cf7389e59aad06af06ee1b325a510))
+
+### Build
+
+
+- *(deps)* Update criterion requirement from 0.7 to 0.8 ([#9](https://github.com/TaceoLabs/eddsa-babyjubjub/pull/9)) - ([e4c05d0](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/e4c05d07133fb4ef47d198d77b14378e9c5e9077))
+
+
 ## [0.2.0](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-poseidon2-v0.1.0...taceo-poseidon2-v0.2.0)
 
 ### 🚜 Refactor
