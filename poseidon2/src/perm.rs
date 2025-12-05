@@ -26,9 +26,11 @@ impl<F: PrimeField, const T: usize, const D: u64, const ROUNDS_F: usize, const R
         round_constants_external: [[F; T]; ROUNDS_F],
         round_constants_internal: [F; ROUNDS_P],
     ) -> Self {
-        assert!(T == 2 || T == 3 || ((T <= 24) && (T % 4 == 0)));
-        assert!(D % 2 == 1);
-        assert!(ROUNDS_F % 2 == 0);
+        const {
+            assert!(T == 2 || T == 3 || ((T <= 24) && (T % 4 == 0)));
+            assert!(D % 2 == 1);
+            assert!(ROUNDS_F % 2 == 0);
+        }
 
         Self {
             mat_internal_diag_m_1,
