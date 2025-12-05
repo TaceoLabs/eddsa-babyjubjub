@@ -3,7 +3,7 @@ use ark_ec::{
     models::CurveConfig,
     twisted_edwards::{Affine, MontCurveConfig, Projective, TECurveConfig},
 };
-use ark_ff::{Field, MontFp, Zero};
+use ark_ff::{BigInt, Field, MontFp, Zero};
 
 use crate::{Fq, Fr};
 
@@ -95,41 +95,35 @@ pub const GENERATOR_Y: Fq =
 #[inline(always)]
 fn conditional_swap(a: &mut EdwardsProjective, b: &mut EdwardsProjective, c: bool) {
     let mask = (c as u64).wrapping_neg(); // all 1s if c is true, all 0s if c is false
-    conditional_swap_field(&mut a.x, &mut b.x, mask);
-    conditional_swap_field(&mut a.y, &mut b.y, mask);
-    conditional_swap_field(&mut a.z, &mut b.z, mask);
-    conditional_swap_field(&mut a.t, &mut b.t, mask);
+    conditionally_swap_bigint(&mut a.x.0, &mut b.x.0, mask);
+    conditionally_swap_bigint(&mut a.y.0, &mut b.y.0, mask);
+    conditionally_swap_bigint(&mut a.z.0, &mut b.z.0, mask);
+    conditionally_swap_bigint(&mut a.t.0, &mut b.t.0, mask);
 }
 
 #[inline(always)]
 fn conditional_select(a: &mut EdwardsProjective, b: &EdwardsProjective, c: bool) {
     let mask = (c as u64).wrapping_neg(); // all 1s if c is true, all 0s if c is false
-    conditional_select_field(&mut a.x, b.x, mask);
-    conditional_select_field(&mut a.y, b.y, mask);
-    conditional_select_field(&mut a.z, b.z, mask);
-    conditional_select_field(&mut a.t, b.t, mask);
+    conditionally_select_bigint(&mut a.x.0, b.x.0, mask);
+    conditionally_select_bigint(&mut a.y.0, b.y.0, mask);
+    conditionally_select_bigint(&mut a.z.0, b.z.0, mask);
+    conditionally_select_bigint(&mut a.t.0, b.t.0, mask);
 }
 
 #[inline(always)]
-fn conditional_select_field(a: &mut Fq, b: Fq, mask: u64) {
-    a.0.0[0] ^= mask & (a.0.0[0] ^ b.0.0[0]);
-    a.0.0[1] ^= mask & (a.0.0[1] ^ b.0.0[1]);
-    a.0.0[2] ^= mask & (a.0.0[2] ^ b.0.0[2]);
-    a.0.0[3] ^= mask & (a.0.0[3] ^ b.0.0[3]);
+fn conditionally_select_bigint<const N: usize>(a: &mut BigInt<N>, b: BigInt<N>, mask: u64) {
+    // Since this is a compile-time constant N, the compiler should unroll this loop.
+    for i in 0..N {
+        a.0[i] ^= mask & (a.0[i] ^ b.0[i]);
+    }
 }
 
 #[inline(always)]
-fn conditional_swap_field(a: &mut Fq, b: &mut Fq, mask: u64) {
-    let swap = mask & (a.0.0[0] ^ b.0.0[0]);
-    a.0.0[0] ^= swap;
-    b.0.0[0] ^= swap;
-    let swap = mask & (a.0.0[1] ^ b.0.0[1]);
-    a.0.0[1] ^= swap;
-    b.0.0[1] ^= swap;
-    let swap = mask & (a.0.0[2] ^ b.0.0[2]);
-    a.0.0[2] ^= swap;
-    b.0.0[2] ^= swap;
-    let swap = mask & (a.0.0[3] ^ b.0.0[3]);
-    a.0.0[3] ^= swap;
-    b.0.0[3] ^= swap;
+fn conditionally_swap_bigint<const N: usize>(a: &mut BigInt<N>, b: &mut BigInt<N>, mask: u64) {
+    // Since this is a compile-time constant N, the compiler should unroll this loop.
+    for i in 0..N {
+        let swap = mask & (a.0[i] ^ b.0[i]);
+        a.0[i] ^= swap;
+        b.0[i] ^= swap;
+    }
 }
