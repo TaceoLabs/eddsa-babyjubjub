@@ -1,6 +1,6 @@
 [package]
 name = "taceo-poseidon2"
-version = "0.2.0"
+version = "0.2.1"
 edition.workspace = true
 rust-version.workspace = true
 description = "Poseidon2 permutation for BN254 curve."
