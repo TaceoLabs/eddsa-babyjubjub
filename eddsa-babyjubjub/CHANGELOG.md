@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.5.3](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-eddsa-babyjubjub-v0.5.2...taceo-eddsa-babyjubjub-v0.5.3)
+
+### Build
+
+
+- *(deps)* Updated minimum version for babyjubjub in eddsa to use constant-time improvements ([#14](https://github.com/TaceoLabs/eddsa-babyjubjub/pull/14)) - ([4a110bc](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/4a110bc9af6409ff32d6eedf828a993968c24efe))
+
+
 ## [0.5.2](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-eddsa-babyjubjub-v0.5.1...taceo-eddsa-babyjubjub-v0.5.2)
 
 ### Build
