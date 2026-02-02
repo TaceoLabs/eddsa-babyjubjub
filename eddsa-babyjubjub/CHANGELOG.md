@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.5.4](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-eddsa-babyjubjub-v0.5.3...taceo-eddsa-babyjubjub-v0.5.4)
+
+### ⚙️ Miscellaneous Tasks
+
+
+- Update `taceo-ark-serde-compat` to v0.4.0, disallowing non-canonical serialization of field elements as strings. - ([0000000](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/0000000))
+
+
 ## [0.5.3](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-eddsa-babyjubjub-v0.5.2...taceo-eddsa-babyjubjub-v0.5.3)
 
 ### Build
