@@ -169,4 +169,61 @@ mod tests {
 
         poseidon2_kat(&POSEIDON2_BN254_T2_PARAMS, &input, &expected);
     }
+
+    #[test]
+    fn poseidon2_bn254_t2_kat_all_zeros() {
+        let input = [ark_bn254::Fr::from(0u64); 2];
+        let expected = [
+            ark_bn254::Fr::from_str(
+                "15621590199821056450610068202457788725601603091791048810523422053872049975191",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "2715232016971520363089762378513811845602449806589549663954401130147232822667",
+            )
+            .unwrap(),
+        ];
+        poseidon2_kat(&POSEIDON2_BN254_T2_PARAMS, &input, &expected);
+    }
+
+    #[test]
+    fn poseidon2_bn254_t2_kat_all_ones() {
+        let input = [ark_bn254::Fr::from(1u64); 2];
+        let expected = [
+            ark_bn254::Fr::from_str(
+                "9647731108978936185894927878221573490593429080082292366711128738986830308852",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "12182851897054208611016549081956934341830770980605431520467368131931900307857",
+            )
+            .unwrap(),
+        ];
+        poseidon2_kat(&POSEIDON2_BN254_T2_PARAMS, &input, &expected);
+    }
+
+    #[test]
+    fn poseidon2_bn254_t2_kat_random() {
+        let input = [
+            ark_bn254::Fr::from_str(
+                "21635575031573999400944812583635782970833961628163643769545570446330252768227",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "491935893655450245496183576506348091012280194952030725661588550103340027820",
+            )
+            .unwrap(),
+        ];
+        let expected = [
+            ark_bn254::Fr::from_str(
+                "20809581131624131580198399772048464729664720986850575920123023746375414517759",
+            )
+            .unwrap(),
+            ark_bn254::Fr::from_str(
+                "18384999161712470106767733232003932603774911696234786881514418962719492139465",
+            )
+            .unwrap(),
+        ];
+        poseidon2_kat(&POSEIDON2_BN254_T2_PARAMS, &input, &expected);
+    }
 }
