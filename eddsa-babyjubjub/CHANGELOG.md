@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.5.5](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-eddsa-babyjubjub-v0.5.4...taceo-eddsa-babyjubjub-v0.5.5)
+
+### Build
+
+
+- Fix sub-crates import and update taceo versions ([#18](https://github.com/TaceoLabs/eddsa-babyjubjub/pull/18)) - ([44cf061](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/44cf06118198127728dbb8371a08e05b88efd5f5))
+
+
 ## [0.5.4](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-eddsa-babyjubjub-v0.5.3...taceo-eddsa-babyjubjub-v0.5.4)
 
 ### ⚙️ Miscellaneous Tasks
