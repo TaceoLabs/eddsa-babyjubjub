@@ -8,6 +8,10 @@ on:
       - v*
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -29,6 +33,7 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
       - name: Rustfmt
         run: cargo fmt --all -- --check
       - name: Clippy
