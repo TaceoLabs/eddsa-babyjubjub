@@ -19,7 +19,7 @@ env:
   # incremental builds are slower and don't make much sense in ci
   CARGO_INCREMENTAL: 0
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: FULL
+  RUST_BACKTRACE: full
 
 jobs:
   lint:
