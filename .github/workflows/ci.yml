@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    tags-ignore:
+      - v*
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUSTDOCFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Rustfmt
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Build documentation
+        run: cargo doc --workspace --all-features --no-deps --document-private-items
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Unit & Integration Tests
+        run: cargo test --workspace --profile ci-dev --all-features
+
+  ci-success:
+    name: CI success
+    if: always()
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - name: Verify all jobs succeeded
+        run: |
+          if [[ "${{ needs.lint.result }}" != "success" \
+             || "${{ needs.test.result }}" != "success" ]]; then
+            echo "lint: ${{ needs.lint.result }}"
+            echo "test: ${{ needs.test.result }}"
+            exit 1
+          fi
