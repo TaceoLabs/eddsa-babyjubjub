@@ -25,7 +25,7 @@ ark-serde-compat = { package = "taceo-ark-serde-compat", version = "0.5", defaul
   "babyjubjub"
 ] }
 ark-serialize = { version = "0.5", default-features = false }
-ark-std = "0.5"
+ark-std = "0.6"
 blake3 = "1"
 eyre = "0.6"
 num-bigint = "0.4"
