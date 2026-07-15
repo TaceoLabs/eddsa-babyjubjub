@@ -1,5 +1,4 @@
-// !#[deny(missing_docs)]
-// !#[deny(unsafe_code)]
+//! `EdDSA` signatures over the Baby Jubjub curve, using Poseidon2 as the internal hash function for the Fiat-Shamir transform.
 
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{AdditiveGroup, BigInteger, PrimeField, Zero};
@@ -13,17 +12,19 @@ type ScalarField = ark_babyjubjub::Fr;
 type BaseField = ark_babyjubjub::Fq;
 type Affine = ark_babyjubjub::EdwardsAffine;
 
-/// A private key for the EdDSA signature scheme.
+/// A private key for the `EdDSA` signature scheme.
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct EdDSAPrivateKey([u8; 32]);
 
 impl EdDSAPrivateKey {
     /// Create a private key from a 32-byte array.
+    #[must_use]
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
     /// Expose the private key as a byte array.
+    #[must_use]
     pub fn to_bytes(&self) -> [u8; 32] {
         self.0
     }
@@ -65,6 +66,7 @@ impl EdDSAPrivateKey {
     }
 
     /// Derive the public key corresponding to this private key.
+    #[must_use]
     pub fn public(&self) -> EdDSAPublicKey {
         let out = self.hash_blake();
         let sk = Self::derive_sk(&out);
@@ -86,9 +88,10 @@ impl EdDSAPrivateKey {
         ScalarField::from_le_bytes_mod_order(&output)
     }
 
-    /// Sign a message (a BaseField element) with the given secret key (a ScalarField element).
+    /// Sign a message (a `BaseField` element) with the given secret key (a `ScalarField` element).
     ///
-    /// The message should be hashed to a BaseField element if it is not encodable as one before signing.
+    /// The message should be hashed to a `BaseField` element if it is not encodable as one before signing.
+    #[must_use]
     pub fn sign(&self, message: BaseField) -> EdDSASignature {
         let out = self.hash_blake();
         let sk = Self::derive_sk(&out);
@@ -109,9 +112,14 @@ impl EdDSAPrivateKey {
     }
 }
 
-/// A public key for the EdDSA signature scheme over the BabyJubJubCurve.
+/// A public key for the `EdDSA` signature scheme over the `BabyJubJubCurve`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[allow(
+    clippy::exhaustive_structs,
+    reason = "Only wraps the inner Affine point - not planned to add something"
+)]
 pub struct EdDSAPublicKey {
+    /// The public key point on the curve.
     #[serde(with = "ark_serde_compat::babyjubjub::affine")]
     pub pk: Affine,
 }
@@ -123,6 +131,7 @@ impl EdDSAPublicKey {
     /// In particular, this uses a so-called "cofactored" verification, such that batched signature verification is possible.
     ///
     /// The only assumption is that both the public key and the nonce point R are canonical, i.e., their encoding is using valid field elements, which must be checked during deserialization.
+    #[must_use]
     pub fn verify(&self, message: BaseField, signature: &EdDSASignature) -> bool {
         // 1. Reject the signature if s not in [0, L-1]
         // The following check is required to prevent malleability of the proofs by using different s, such as s + p, if s is given as a BaseField element.
@@ -159,6 +168,9 @@ impl EdDSAPublicKey {
     }
 
     /// Serialize the public key to a compressed byte array.
+    ///
+    /// # Errors
+    /// Returns an error if the public key point fails to serialize.
     pub fn to_compressed_bytes(&self) -> eyre::Result<[u8; 32]> {
         let mut buf = Vec::new();
         self.pk.serialize_compressed(&mut buf)?;
@@ -168,17 +180,26 @@ impl EdDSAPublicKey {
     }
 
     /// Parse the public key from a byte array with the point in compressed format.
+    ///
+    /// # Errors
+    /// Returns an error if `bytes` does not encode a valid compressed curve point.
     pub fn from_compressed_bytes(bytes: [u8; 32]) -> eyre::Result<Self> {
         let pk = Affine::deserialize_compressed(&bytes[0..32])?;
         Ok(Self { pk })
     }
 }
 
-/// An EdDSA signature on the Baby Jubjub curve, using Poseidon2 as the internal hash function for the Fiat-Shamir transform.
+/// An `EdDSA` signature on the Baby Jubjub curve, using Poseidon2 as the internal hash function for the Fiat-Shamir transform.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[allow(
+    clippy::exhaustive_structs,
+    reason = "Only wraps the inner Affine point and ScalarField - not planned to add something"
+)]
 pub struct EdDSASignature {
+    /// The nonce point of the signature.
     #[serde(with = "ark_serde_compat::babyjubjub::affine")]
     pub r: Affine,
+    /// The scalar part of the signature.
     #[serde(with = "ark_serde_compat::field")]
     pub s: ScalarField,
 }
@@ -192,6 +213,9 @@ impl EdDSASignature {
     }
 
     /// Expose the signature as a byte array.
+    ///
+    /// # Errors
+    /// Returns an error if `r` or `s` fail to serialize.
     pub fn to_compressed_bytes(&self) -> eyre::Result<[u8; 64]> {
         let mut buf = Vec::new();
         self.r.serialize_compressed(&mut buf)?;
@@ -202,6 +226,9 @@ impl EdDSASignature {
     }
 
     /// Parse the signature from a byte array.
+    ///
+    /// # Errors
+    /// Returns an error if `bytes` does not encode a valid compressed point and scalar.
     pub fn from_compressed_bytes(bytes: [u8; 64]) -> eyre::Result<Self> {
         let r = Affine::deserialize_compressed(&bytes[0..32])?;
         let s: ScalarField = ScalarField::deserialize_compressed(&bytes[32..64])?;
@@ -264,9 +291,15 @@ mod tests {
             "invalid signature should not verify"
         );
 
-        let bytes = signature.to_compressed_bytes().unwrap();
-        let signature_deserialized = EdDSASignature::from_compressed_bytes(bytes).unwrap();
-        assert_eq!(signature, signature_deserialized);
+        let bytes = signature
+            .to_compressed_bytes()
+            .expect("signature serializes");
+        let signature_deserialized =
+            EdDSASignature::from_compressed_bytes(bytes).expect("bytes deserialize");
+        assert_eq!(
+            signature, signature_deserialized,
+            "signature should roundtrip through compressed bytes"
+        );
     }
 
     #[test]
@@ -286,7 +319,7 @@ mod tests {
         let message = BaseField::from_str(
             "3126080974277891902445700130528654565374341115115698716199527644337840721369",
         )
-        .unwrap();
+        .expect("Is in BaseField");
         test(*sk, message, &mut rng);
     }
 
@@ -297,7 +330,7 @@ mod tests {
         let message = BaseField::from_str(
             "2915128568691568051790179173058040565240368703618887264694651479943038317157",
         )
-        .unwrap();
+        .expect("Is in BaseField");
         test(*sk, message, &mut rng);
     }
 
@@ -307,17 +340,29 @@ mod tests {
         let message = BaseField::from_str(
             "2915128568691568051790179173058040565240368703618887264694651479943038317157",
         )
-        .unwrap();
+        .expect("Is in BaseField");
         let signature = EdDSAPrivateKey::from_bytes(*sk).sign(message);
         let pk = EdDSAPrivateKey::from_bytes(*sk).public();
-        let bytes = signature.to_compressed_bytes().unwrap();
-        let signature_prime = EdDSASignature::from_compressed_bytes(bytes).unwrap();
-        assert_eq!(signature, signature_prime);
+        let bytes = signature
+            .to_compressed_bytes()
+            .expect("signature serializes");
+        let signature_prime =
+            EdDSASignature::from_compressed_bytes(bytes).expect("bytes deserialize");
+        assert_eq!(
+            signature, signature_prime,
+            "signature should roundtrip through compressed bytes"
+        );
 
-        let pk_bytes = pk.to_compressed_bytes().unwrap();
-        let pk_prime = EdDSAPublicKey::from_compressed_bytes(pk_bytes).unwrap();
-        assert_eq!(pk, pk_prime);
+        let pk_bytes = pk.to_compressed_bytes().expect("public key serializes");
+        let pk_prime = EdDSAPublicKey::from_compressed_bytes(pk_bytes).expect("bytes deserialize");
+        assert_eq!(
+            pk, pk_prime,
+            "public key should roundtrip through compressed bytes"
+        );
 
-        assert!(pk_prime.verify(message, &signature_prime));
+        assert!(
+            pk_prime.verify(message, &signature_prime),
+            "roundtripped signature should still verify"
+        );
     }
 }

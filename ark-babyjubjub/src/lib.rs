@@ -6,7 +6,6 @@
     nonstandard_style,
     rust_2018_idioms
 )]
-#![forbid(unsafe_code)]
 // TODO: Update this with correct values
 //! This library implements a twisted Edwards curve whose base field is the
 //! scalar field of the curve BN254. This allows defining cryptographic
