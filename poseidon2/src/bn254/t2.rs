@@ -123,6 +123,7 @@ pub(crate) const POSEIDON2_BN254_T2_PARAMS: Poseidon2Permutation<Scalar, T, D, R
 ///
 /// # Returns
 /// A permuted state as `[ark_bn254::Fr; 2]`.
+#[must_use]
 pub fn permutation(state: &[ark_bn254::Fr; 2]) -> [ark_bn254::Fr; 2] {
     POSEIDON2_BN254_T2_PARAMS.permutation(state)
 }
@@ -134,7 +135,7 @@ pub fn permutation(state: &[ark_bn254::Fr; 2]) -> [ark_bn254::Fr; 2] {
 /// # Arguments
 /// * `state` - A mutable reference to the state array (`[ark_bn254::Fr; 2]`).
 pub fn permutation_in_place(state: &mut [ark_bn254::Fr; 2]) {
-    POSEIDON2_BN254_T2_PARAMS.permutation_in_place(state)
+    POSEIDON2_BN254_T2_PARAMS.permutation_in_place(state);
 }
 
 #[cfg(test)]
@@ -160,11 +161,11 @@ mod tests {
             ark_bn254::Fr::from_str(
                 "13120422956170837922441672802975889424559262309139960702680326932494325745547",
             )
-            .unwrap(),
+            .expect("Is in Fr"),
             ark_bn254::Fr::from_str(
                 "5923567162677888564808904842769941181302763723060647224839027357562627386465",
             )
-            .unwrap(),
+            .expect("Is in Fr"),
         ];
 
         poseidon2_kat(&POSEIDON2_BN254_T2_PARAMS, &input, &expected);

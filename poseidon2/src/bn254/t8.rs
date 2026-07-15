@@ -180,6 +180,7 @@ pub(crate) const POSEIDON2_BN254_T8_PARAMS: Poseidon2Permutation<Scalar, T, D, R
 ///
 /// # Returns
 /// A permuted state as `[ark_bn254::Fr; 8]`.
+#[must_use]
 pub fn permutation(state: &[ark_bn254::Fr; 8]) -> [ark_bn254::Fr; 8] {
     POSEIDON2_BN254_T8_PARAMS.permutation(state)
 }
@@ -191,7 +192,7 @@ pub fn permutation(state: &[ark_bn254::Fr; 8]) -> [ark_bn254::Fr; 8] {
 /// # Arguments
 /// * `state` - A mutable reference to the state array (`[ark_bn254::Fr; 8]`).
 pub fn permutation_in_place(state: &mut [ark_bn254::Fr; 8]) {
-    POSEIDON2_BN254_T8_PARAMS.permutation_in_place(state)
+    POSEIDON2_BN254_T8_PARAMS.permutation_in_place(state);
 }
 
 #[cfg(test)]
@@ -219,35 +220,35 @@ mod tests {
             ark_bn254::Fr::from_str(
                 "13163567864211573827878829467860137302577760599598440387954761704438999762399",
             )
-            .unwrap(),
+            .expect("Is in Fr"),
             ark_bn254::Fr::from_str(
                 "20455256474176316209572707628365862887207812418465031548192789068192434065861",
             )
-            .unwrap(),
+            .expect("Is in Fr"),
             ark_bn254::Fr::from_str(
                 "21622031586696647398529562584873094656572287904668581566093346191656615936784",
             )
-            .unwrap(),
+            .expect("Is in Fr"),
             ark_bn254::Fr::from_str(
                 "18320622048765136384409419776996464874987888500923344182439589703061890523284",
             )
-            .unwrap(),
+            .expect("Is in Fr"),
             ark_bn254::Fr::from_str(
                 "19915468795157938233689963601267136400922725821760118753901600546477081024243",
             )
-            .unwrap(),
+            .expect("Is in Fr"),
             ark_bn254::Fr::from_str(
                 "12383970660639123649548441396659012498414420037083153473614822644813849243474",
             )
-            .unwrap(),
+            .expect("Is in Fr"),
             ark_bn254::Fr::from_str(
                 "9133088157465982496917058916696585316057943251337470087079495488316110895778",
             )
-            .unwrap(),
+            .expect("Is in Fr"),
             ark_bn254::Fr::from_str(
                 "5020935059501715015422969097649999023750915432550677386523662686145648636517",
             )
-            .unwrap(),
+            .expect("Is in Fr"),
         ];
 
         poseidon2_kat(&POSEIDON2_BN254_T8_PARAMS, &input, &expected);

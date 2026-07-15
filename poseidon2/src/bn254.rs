@@ -14,7 +14,6 @@
 //! poseidon2::bn254::t4::permutation(&state);
 //! poseidon2::bn254::t4::permutation_in_place(&mut state);
 //! ```
-//!
 //! All permutations are feature-gated, so enable only the once you need.
 
 #[cfg(feature = "t12")]
@@ -60,7 +59,7 @@ mod test {
         expected: &[F; T],
     ) {
         let result = poseidon2_perm.permutation(input);
-        assert_eq!(&result, expected);
+        assert_eq!(&result, expected, "permutation output does not match KAT");
     }
 
     pub(crate) fn poseidon2_consistent_perm<
@@ -77,11 +76,12 @@ mod test {
         let mut input2 = input1.clone();
         input2.rotate_right(T / 2);
 
-        let perm1 = poseidon2_perm.permutation(input1.as_slice().try_into().unwrap());
-        let perm2 = poseidon2_perm.permutation(&input1.try_into().unwrap());
-        let perm3 = poseidon2_perm.permutation(&input2.try_into().unwrap());
+        let perm1 =
+            poseidon2_perm.permutation(input1.as_slice().try_into().expect("vec has length T"));
+        let perm2 = poseidon2_perm.permutation(&input1.try_into().expect("vec has length T"));
+        let perm3 = poseidon2_perm.permutation(&input2.try_into().expect("vec has length T"));
 
-        assert_eq!(perm1, perm2);
-        assert_ne!(perm1, perm3);
+        assert_eq!(perm1, perm2, "same input should give same output");
+        assert_ne!(perm1, perm3, "different input should give different output");
     }
 }

@@ -1,4 +1,3 @@
-#![deny(missing_docs, unsafe_code)]
 //! Poseidon2 permutation methods, based on [eprint.iacr.org/2023/323](https://eprint.iacr.org/2023/323).
 //!
 //! This crate provides efficient, pure-Rust, minimal APIs to compute the Poseidon2 permutation (not hash) on all supported state sizes (`t2`, `t3`, `t4`, `t8`, `t12`, `t16`).

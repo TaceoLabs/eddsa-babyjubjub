@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(dead_code, reason = "not all state sizes are used by every feature")]
 use ark_ff::PrimeField;
 
 /// A struct representing the Poseidon2 permutation.
@@ -27,9 +27,12 @@ impl<F: PrimeField, const T: usize, const D: u64, const ROUNDS_F: usize, const R
         round_constants_internal: [F; ROUNDS_P],
     ) -> Self {
         const {
-            assert!(T == 2 || T == 3 || ((T <= 24) && (T % 4 == 0)));
-            assert!(D % 2 == 1);
-            assert!(ROUNDS_F % 2 == 0);
+            assert!(
+                T == 2 || T == 3 || ((T <= 24) && (T % 4 == 0)),
+                "unsupported state size T"
+            );
+            assert!(D % 2 == 1, "D must be odd");
+            assert!(ROUNDS_F % 2 == 0, "ROUNDS_F must be even");
         }
 
         Self {
@@ -109,12 +112,12 @@ impl<F: PrimeField, const T: usize, const D: u64, const ROUNDS_F: usize, const R
                 input[2] += sum;
             }
             4 => {
-                Self::matmul_m4(input.as_mut_slice().try_into().unwrap());
+                Self::matmul_m4(input.as_mut_slice().try_into().expect("slice has length 4"));
             }
             8 | 12 | 16 | 20 | 24 => {
                 // Applying cheap 4x4 MDS matrix to each 4-element part of the state
                 for state in input.chunks_exact_mut(4) {
-                    Self::matmul_m4(state.try_into().unwrap());
+                    Self::matmul_m4(state.try_into().expect("chunk has length 4"));
                 }
 
                 // Applying second cheap matrix for t > 4
@@ -140,8 +143,16 @@ impl<F: PrimeField, const T: usize, const D: u64, const ROUNDS_F: usize, const R
         match T {
             2 => {
                 // Matrix [[2, 1], [1, 3]]
-                debug_assert_eq!(self.mat_internal_diag_m_1[0], F::one());
-                debug_assert_eq!(self.mat_internal_diag_m_1[1], F::from(2u64));
+                debug_assert_eq!(
+                    self.mat_internal_diag_m_1[0],
+                    F::one(),
+                    "unexpected internal diagonal constant"
+                );
+                debug_assert_eq!(
+                    self.mat_internal_diag_m_1[1],
+                    F::from(2u64),
+                    "unexpected internal diagonal constant"
+                );
                 let sum = input[0] + input[1];
                 input[0] += &sum;
                 input[1].double_in_place();
@@ -149,9 +160,21 @@ impl<F: PrimeField, const T: usize, const D: u64, const ROUNDS_F: usize, const R
             }
             3 => {
                 // Matrix [[2, 1, 1], [1, 2, 1], [1, 1, 3]]
-                debug_assert_eq!(self.mat_internal_diag_m_1[0], F::one());
-                debug_assert_eq!(self.mat_internal_diag_m_1[1], F::one());
-                debug_assert_eq!(self.mat_internal_diag_m_1[2], F::from(2u64));
+                debug_assert_eq!(
+                    self.mat_internal_diag_m_1[0],
+                    F::one(),
+                    "unexpected internal diagonal constant"
+                );
+                debug_assert_eq!(
+                    self.mat_internal_diag_m_1[1],
+                    F::one(),
+                    "unexpected internal diagonal constant"
+                );
+                debug_assert_eq!(
+                    self.mat_internal_diag_m_1[2],
+                    F::from(2u64),
+                    "unexpected internal diagonal constant"
+                );
                 let sum = input[0] + input[1] + input[2];
                 input[0] += &sum;
                 input[1] += &sum;
@@ -172,15 +195,15 @@ impl<F: PrimeField, const T: usize, const D: u64, const ROUNDS_F: usize, const R
     }
 
     /// The round constant addition in the external rounds of the Poseidon2 permutation.
-    pub fn add_rc_external(&self, input: &mut [F; T], rc_e: &[F; T]) {
+    pub fn add_rc_external(input: &mut [F; T], rc_e: &[F; T]) {
         for (s, rc) in input.iter_mut().zip(rc_e.iter()) {
             *s += rc;
         }
     }
 
     /// One external round of the Poseidon2 permutation.
-    pub fn external_round(&self, state: &mut [F; T], rc_e: &[F; T]) {
-        self.add_rc_external(state, rc_e);
+    pub fn external_round(state: &mut [F; T], rc_e: &[F; T]) {
+        Self::add_rc_external(state, rc_e);
         Self::sbox(state);
         Self::matmul_external(state);
     }
@@ -201,7 +224,7 @@ impl<F: PrimeField, const T: usize, const D: u64, const ROUNDS_F: usize, const R
 
         // First set of external rounds
         for rc_e in round_constants_external.by_ref().take(ROUNDS_F / 2) {
-            self.external_round(state, rc_e);
+            Self::external_round(state, rc_e);
         }
 
         // Internal rounds
@@ -211,7 +234,7 @@ impl<F: PrimeField, const T: usize, const D: u64, const ROUNDS_F: usize, const R
 
         // Remaining external rounds
         for rc_e in round_constants_external {
-            self.external_round(state, rc_e);
+            Self::external_round(state, rc_e);
         }
     }
 

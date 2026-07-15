@@ -1,4 +1,6 @@
-use criterion::*;
+//! Benchmarks for the Poseidon2 permutation.
+
+use criterion::{Criterion, criterion_group, criterion_main};
 
 fn poseidon2_bench(c: &mut Criterion) {
     c.bench_function("Poseidon2 Permutation (t=3)", |b| {

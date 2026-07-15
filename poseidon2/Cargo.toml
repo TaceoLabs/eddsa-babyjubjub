@@ -38,3 +38,6 @@ t4 = []
 t8 = []
 t12 = []
 t16 = []
+
+[lints]
+workspace = true
