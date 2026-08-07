@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-poseidon2-v0.2.1...taceo-poseidon2-v0.2.2)
+
+### 🚜 Refactor
+
+
+- *(poseidon2)* Added prod level clippy - ([9cdc559](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/9cdc5597f62c418f47440f416e6fcb6adc11ceb5))
+
+
 ## [0.2.1](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-poseidon2-v0.2.0...taceo-poseidon2-v0.2.1)
 
 ### ⚙️ Miscellaneous Tasks
