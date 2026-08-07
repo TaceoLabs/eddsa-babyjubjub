@@ -21,6 +21,9 @@ ark-ff = { version = "0.6", default-features = false }
 ark-groth16 = { version = "0.6", default-features = false }
 ark-r1cs-std = { version = "0.6", default-features = false }
 ark-relations = { version = "0.6", default-features = false }
+ark-serde-compat = { package = "taceo-ark-serde-compat", version = "0.6", default-features = false, features = [
+  "babyjubjub"
+] }
 ark-serialize = { version = "0.6", default-features = false }
 ark-std = "0.6"
 blake3 = "1"
@@ -53,6 +56,11 @@ unwrap_used = "deny"
 [workspace.lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"
+
+# So that `taceo-ark-serde-compat` shares the in-tree `taceo-ark-babyjubjub`
+# instead of pulling its own copy from crates.io.
+[patch.crates-io]
+taceo-ark-babyjubjub = { path = "ark-babyjubjub" }
 
 # This profile can be used for CI in pull requests.
 [profile.ci-dev]
