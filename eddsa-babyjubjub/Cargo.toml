@@ -9,16 +9,23 @@ repository.workspace = true
 license.workspace = true
 publish = true
 
+# TODO: this crate is held back on arkworks 0.5 until `taceo-ark-serde-compat`
+# 0.6 is published (it in turn needs `taceo-ark-babyjubjub` 0.6, released by
+# this very PR). Until then it builds against the *published* 0.5 releases of
+# its sibling crates instead of the in-tree ones; restore the `path` /
+# `workspace = true` deps once 0.6 of `taceo-ark-serde-compat` is on crates.io.
 [dependencies]
-ark-babyjubjub = { package = "taceo-ark-babyjubjub", path = "../ark-babyjubjub", version = "0.5.3" }
-ark-ec = { workspace = true }
-ark-ff = { workspace = true }
-ark-serde-compat = { workspace = true }
-ark-serialize = { workspace = true }
+ark-babyjubjub = { package = "taceo-ark-babyjubjub", version = "0.5.3" }
+ark-ec = { version = "0.5", default-features = false }
+ark-ff = { version = "0.5", default-features = false }
+ark-serde-compat = { package = "taceo-ark-serde-compat", version = "0.5", default-features = false, features = [
+  "babyjubjub"
+] }
+ark-serialize = { version = "0.5", default-features = false }
 blake3 = { workspace = true }
 eyre = { workspace = true }
 num-bigint.workspace = true
-poseidon2 = { package = "taceo-poseidon2", path = "../poseidon2", version = "0.2.1", default-features = false, features = [
+poseidon2 = { package = "taceo-poseidon2", version = "0.2.1", default-features = false, features = [
   "bn254",
   "t8"
 ] }
