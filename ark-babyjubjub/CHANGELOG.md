@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-ark-babyjubjub-v0.5.3...taceo-ark-babyjubjub-v0.6.0)
+
+### 🚜 Refactor
+
+
+- *(eddsa)* Enables prod level clippy - ([9dfc5ba](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/9dfc5ba8fc757aee64fa6055aa3f85e9222acf72))
+
+### Build
+
+
+- *(deps)* [**breaking**] Update arkworks to 0.6 ([#43](https://github.com/TaceoLabs/eddsa-babyjubjub/pull/43)) - ([5ddba4c](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/5ddba4cb48ca12584cc3eecbca07644ebc682f27))
+
+
 ## [0.5.3](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-ark-babyjubjub-v0.5.2...taceo-ark-babyjubjub-v0.5.3)
 
 ### 🚜 Refactor
