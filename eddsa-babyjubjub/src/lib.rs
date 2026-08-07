@@ -334,6 +334,95 @@ mod tests {
         test(*sk, message, &mut rng);
     }
 
+    /// KAT generated with taceo-eddsa-babyjubjub v0.5.5. Ensures the same seed
+    /// derives the same secret/public key across crate versions.
+    #[test]
+    fn test_secret_key_kat() {
+        let seed = *b"a4a7d3b1e2f60b9c8d5e1f2a3b4c5d6e";
+        let sk = EdDSAPrivateKey::from_bytes(seed);
+        assert_eq!(sk.to_bytes(), seed, "secret key should roundtrip");
+        let pk = sk.public();
+        assert_eq!(
+            pk.pk.x,
+            BaseField::from_str(
+                "6455457437599555712470292006698497651368330439885001091360860505942781961078"
+            )
+            .expect("Is in BaseField"),
+            "derived public key x-coordinate should match KAT"
+        );
+        assert_eq!(
+            pk.pk.y,
+            BaseField::from_str(
+                "159582469885801264018994393559668361426312790589452469977288210156289744741"
+            )
+            .expect("Is in BaseField"),
+            "derived public key y-coordinate should match KAT"
+        );
+        let expected_compressed = [
+            101, 95, 19, 110, 162, 140, 107, 58, 57, 76, 28, 109, 107, 186, 157, 141, 210, 165,
+            150, 149, 34, 49, 178, 229, 174, 23, 214, 201, 10, 82, 90, 0,
+        ];
+        assert_eq!(
+            pk.to_compressed_bytes().expect("public key serializes"),
+            expected_compressed,
+            "compressed public key should match KAT"
+        );
+    }
+
+    /// KAT generated with taceo-eddsa-babyjubjub v0.5.5. Ensures signing (and thus
+    /// the signing-key and nonce derivation) stays stable across crate versions.
+    #[test]
+    fn test_signature_kat() {
+        let seed = *b"a4a7d3b1e2f60b9c8d5e1f2a3b4c5d6e";
+        let sk = EdDSAPrivateKey::from_bytes(seed);
+        let message = BaseField::from_str(
+            "11402413954866905186435396811587452922431987224444219565589628185750911976901",
+        )
+        .expect("Is in BaseField");
+        let signature = sk.sign(message);
+        assert_eq!(
+            signature.r.x,
+            BaseField::from_str(
+                "13510474864897098616813579098554011532099156065498391918941310871279007011380"
+            )
+            .expect("Is in BaseField"),
+            "signature nonce point x-coordinate should match KAT"
+        );
+        assert_eq!(
+            signature.r.y,
+            BaseField::from_str(
+                "6174281596809503539616638137919225478797775244469469874632974950922119341264"
+            )
+            .expect("Is in BaseField"),
+            "signature nonce point y-coordinate should match KAT"
+        );
+        assert_eq!(
+            signature.s,
+            ScalarField::from_str(
+                "1417540261437304871044355305314258066261410991135874710101475943871745383953"
+            )
+            .expect("Is in ScalarField"),
+            "signature scalar should match KAT"
+        );
+        let expected_compressed = [
+            208, 228, 124, 4, 10, 67, 232, 77, 22, 151, 32, 204, 155, 41, 216, 151, 215, 14, 76,
+            210, 200, 224, 36, 87, 163, 18, 231, 191, 0, 133, 166, 141, 17, 94, 156, 60, 158, 123,
+            89, 29, 240, 23, 197, 75, 2, 11, 151, 120, 249, 94, 212, 38, 4, 179, 49, 233, 133, 234,
+            209, 144, 162, 76, 34, 3,
+        ];
+        assert_eq!(
+            signature
+                .to_compressed_bytes()
+                .expect("signature serializes"),
+            expected_compressed,
+            "compressed signature should match KAT"
+        );
+        assert!(
+            sk.public().verify(message, &signature),
+            "KAT signature should verify"
+        );
+    }
+
     #[test]
     fn test_encoding_roundtrip() {
         let sk = b"1cc01b8ddd6851915a42e0cfc6b7088c";
