@@ -2,12 +2,17 @@
 
 ## [Unreleased]
 
-## [0.2.2](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-poseidon2-v0.2.1...taceo-poseidon2-v0.2.2)
+## [0.3.0](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-poseidon2-v0.2.1...taceo-poseidon2-v0.3.0)
 
 ### 🚜 Refactor
 
 
 - *(poseidon2)* Added prod level clippy - ([9cdc559](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/9cdc5597f62c418f47440f416e6fcb6adc11ceb5))
+
+### Build
+
+
+- *(deps)* [**breaking**] Update arkworks to 0.6 ([#43](https://github.com/TaceoLabs/eddsa-babyjubjub/pull/43)) - ([5ddba4c](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/5ddba4cb48ca12584cc3eecbca07644ebc682f27))
 
 
 ## [0.2.1](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-poseidon2-v0.2.0...taceo-poseidon2-v0.2.1)
