@@ -1,6 +1,6 @@
 [package]
 name = "taceo-eddsa-babyjubjub"
-version = "0.5.5"
+version = "0.6.0"
 edition.workspace = true
 # Higher than the workspace MSRV: `taceo-ark-serde-compat` 0.6 requires 1.90.
 rust-version = "1.90"
