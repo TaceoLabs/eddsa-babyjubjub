@@ -1,3 +1,9 @@
+# Held back on arkworks 0.5 until `taceo-ark-serde-compat` 0.6 is published;
+# re-enable together with restoring the path deps in its manifest.
+[[package]]
+name = "taceo-eddsa-babyjubjub"
+release = false
+
 [changelog]
 header = """# Changelog
 
