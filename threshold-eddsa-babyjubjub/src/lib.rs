@@ -3,6 +3,7 @@
 #[cfg(feature = "additive")]
 pub mod additive;
 pub mod commit;
+pub mod keygen;
 pub mod nonce;
 pub mod partial_commit;
 pub mod session;
@@ -23,10 +24,10 @@ pub(crate) const FROST_3_NONCE_COMBINER_LABEL: &[u8] = b"FROST_3_NONCE_COMBINER"
 ///
 /// Carries the IDs of the parties that contributed a malformed signature share.
 #[derive(Debug, thiserror::Error)]
-#[error("Cheating parties detected")]
-pub struct CheatingPartiesError(Vec<usize>);
+#[error("Malicious parties detected")]
+pub struct MaliciousPartiesError(Vec<usize>);
 
-impl CheatingPartiesError {
+impl MaliciousPartiesError {
     /// Consumes the error and returns the IDs of the parties identified as cheating.
     #[must_use]
     pub fn into_inner(self) -> Vec<usize> {

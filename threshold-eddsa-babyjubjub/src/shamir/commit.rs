@@ -6,7 +6,7 @@
 //! the parties that contributed a malformed share.
 
 use crate::{
-    Affine, BaseField, CheatingPartiesError, Projective, ScalarField,
+    Affine, BaseField, MaliciousPartiesError, Projective, ScalarField,
     commit::EdDSACommitments,
     nonce::CombineTwoNonceRandomnessArgs,
     shamir::{partial_commit::PartialEdDSACommitmentsShamir, signature::EdDSASigShareShamir},
@@ -67,7 +67,7 @@ impl EdDSACommitmentsShamir {
     /// Lagrange coefficients.
     ///
     /// # Errors
-    /// Returns a [`CheatingPartiesError`] with the IDs of all parties whose signature share does
+    /// Returns a [`MaliciousPartiesError`] with the IDs of all parties whose signature share does
     /// not verify against their commitment and their Lagrange-weighted share of the public key.
     ///
     /// # Panics
@@ -86,7 +86,7 @@ impl EdDSACommitmentsShamir {
         x_share_commitments: &[Affine],
         commitments: &[PartialEdDSACommitmentsShamir],
         lagrange_coefficients: &[ScalarField],
-    ) -> Result<EdDSASignature, CheatingPartiesError> {
+    ) -> Result<EdDSASignature, MaliciousPartiesError> {
         assert_eq!(
             shares.len(),
             x_share_commitments.len(),
@@ -141,7 +141,7 @@ impl EdDSACommitmentsShamir {
         }
 
         if !cheating_parties.is_empty() {
-            return Err(CheatingPartiesError(cheating_parties));
+            return Err(MaliciousPartiesError(cheating_parties));
         }
 
         // Finally assemble the signature

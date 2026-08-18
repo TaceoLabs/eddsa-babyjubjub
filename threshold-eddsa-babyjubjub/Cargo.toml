@@ -16,19 +16,20 @@ blake3 = { workspace = true }
 ark-ec = { workspace = true }
 ark-ff = { workspace = true }
 ark-serde-compat = { workspace = true }
-ark-serialize = { workspace = true }
+ark-serialize = { workspace = true, features = ["serde"] }
 eddsa-babyjubjub = { workspace = true }
+eyre = { workspace = true }
 itertools = { workspace = true }
 num-bigint = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
-uuid = { workspace = true, features = ["v4"] }
+uuid = { workspace = true, features = ["v4", "serde"] }
 zeroize = { workspace = true }
 
 [lints]
 workspace = true
 
 [features]
-default = []
+default = ["additive"]
 additive = []

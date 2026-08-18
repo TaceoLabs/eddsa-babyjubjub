@@ -13,7 +13,7 @@ use crate::{
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::UniformRand;
 use eddsa_babyjubjub::EdDSAPublicKey;
-use rand::{Rng, seq::IteratorRandom};
+use rand::{CryptoRng, Rng, seq::IteratorRandom};
 use uuid::Uuid;
 
 fn share<R: Rng>(
@@ -35,34 +35,30 @@ fn share<R: Rng>(
     shares
 }
 
-fn test_threshold_eddsa(num_parties: usize, degree: usize, cheating_positions: &[usize]) {
-    let mut rng = rand::thread_rng();
-
-    let message = BaseField::rand(&mut rng);
-    let x = ScalarField::rand(&mut rng);
-    let x_shares = share(x, num_parties, degree, &mut rng);
-
-    // Create public keys
-    let public_key = (Affine::generator() * x).into_affine();
-    let public_key_shares = x_shares
-        .iter()
-        .map(|x| Affine::generator() * x.0)
-        .collect::<Vec<_>>();
-    let public_key_ =
-        utils::test_utils::reconstruct_random_pointshares(&public_key_shares, degree, &mut rng);
-    assert_eq!(public_key, public_key_);
-    let public_key = EdDSAPublicKey { pk: public_key };
-
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Shared test driver for the plain and the DKG-based signing flow"
+)]
+pub(crate) fn test_threshold_eddsa_inner<R: Rng + CryptoRng>(
+    num_parties: usize,
+    degree: usize,
+    cheating_positions: &[usize],
+    message: BaseField,
+    x_shares: &[DLogShareShamir],
+    public_key: &EdDSAPublicKey,
+    public_key_shares: &[Affine],
+    rng: &mut R,
+) {
     // Crete session and choose the used set of parties
     let session_id = Uuid::new_v4();
-    let used_parties = (1..=u16::try_from(num_parties).expect("Fits into u16"))
-        .choose_multiple(&mut rng, degree + 1);
+    let used_parties =
+        (1..=u16::try_from(num_parties).expect("Fits into u16")).choose_multiple(rng, degree + 1);
 
     // 1) Aggregator requests commitments from all servers
     let mut sessions = Vec::with_capacity(num_parties);
     let mut commitments = Vec::with_capacity(num_parties);
     for _ in 0..num_parties {
-        let (session, comm) = EdDSASessionShamir::pre_round(&mut rng);
+        let (session, comm) = EdDSASessionShamir::pre_round(rng);
         sessions.push(Some(session));
         commitments.push(comm);
     }
@@ -91,7 +87,7 @@ fn test_threshold_eddsa(num_parties: usize, degree: usize, cheating_positions: &
             session_id,
             x_,
             message,
-            &public_key,
+            public_key,
             challenge.clone(),
             lagrange,
         );
@@ -106,7 +102,7 @@ fn test_threshold_eddsa(num_parties: usize, degree: usize, cheating_positions: &
     // 4) Aggregator combines received signature shares
     let used_public_key_shares = used_parties
         .iter()
-        .map(|&party_id| public_key_shares[usize::from(party_id) - 1].into_affine())
+        .map(|&party_id| public_key_shares[usize::from(party_id) - 1])
         .collect::<Vec<_>>();
 
     // Without identifiable abort
@@ -120,7 +116,7 @@ fn test_threshold_eddsa(num_parties: usize, degree: usize, cheating_positions: &
         session_id,
         &used_sigs,
         message,
-        &public_key,
+        public_key,
         &used_public_key_shares,
         &used_commitments,
         &lagrange_coefficients,
@@ -141,6 +137,41 @@ fn test_threshold_eddsa(num_parties: usize, degree: usize, cheating_positions: &
         }
         assert!(!public_key.verify(message, &signature_noabort));
     }
+}
+
+fn test_threshold_eddsa(num_parties: usize, degree: usize, cheating_positions: &[usize]) {
+    let mut rng = rand::thread_rng();
+
+    let message = BaseField::rand(&mut rng);
+    let x = ScalarField::rand(&mut rng);
+    let x_shares = share(x, num_parties, degree, &mut rng);
+
+    // Create public keys
+    let public_key = (Affine::generator() * x).into_affine();
+    let public_key_shares = x_shares
+        .iter()
+        .map(|x| Affine::generator() * x.0)
+        .collect::<Vec<_>>();
+    let public_key_ =
+        utils::test_utils::reconstruct_random_pointshares(&public_key_shares, degree, &mut rng);
+    assert_eq!(public_key, public_key_);
+    let public_key = EdDSAPublicKey { pk: public_key };
+
+    let public_key_shares = public_key_shares
+        .iter()
+        .map(|&pk_share| pk_share.into_affine())
+        .collect::<Vec<_>>();
+
+    test_threshold_eddsa_inner(
+        num_parties,
+        degree,
+        cheating_positions,
+        message,
+        &x_shares,
+        &public_key,
+        &public_key_shares,
+        &mut rng,
+    );
 }
 
 #[test]

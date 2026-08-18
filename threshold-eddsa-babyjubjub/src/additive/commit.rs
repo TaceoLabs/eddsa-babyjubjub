@@ -6,7 +6,7 @@
 //! that contributed a malformed share.
 
 use crate::{
-    Affine, BaseField, CheatingPartiesError, Projective, ScalarField,
+    Affine, BaseField, MaliciousPartiesError, Projective, ScalarField,
     additive::{partial_commit::PartialEdDSACommitmentsAdditive, signature::EdDSASigShareAdditive},
     commit::EdDSACommitments,
     nonce::CombineTwoNonceRandomnessArgs,
@@ -65,7 +65,7 @@ impl EdDSACommitmentsAdditive {
     /// The shares, commitments, and `x_share_commitments` must be in canonical order.
     ///
     /// # Errors
-    /// Returns a [`CheatingPartiesError`] with the IDs of all parties whose signature share does
+    /// Returns a [`MaliciousPartiesError`] with the IDs of all parties whose signature share does
     /// not verify against their commitment and their share of the public key.
     ///
     /// # Panics
@@ -79,7 +79,7 @@ impl EdDSACommitmentsAdditive {
         public_key: &EdDSAPublicKey,
         x_share_commitments: &[Affine],
         commitments: &[PartialEdDSACommitmentsAdditive],
-    ) -> Result<EdDSASignature, CheatingPartiesError> {
+    ) -> Result<EdDSASignature, MaliciousPartiesError> {
         assert_eq!(
             shares.len(),
             x_share_commitments.len(),
@@ -124,7 +124,7 @@ impl EdDSACommitmentsAdditive {
         }
 
         if !cheating_parties.is_empty() {
-            return Err(CheatingPartiesError(cheating_parties));
+            return Err(MaliciousPartiesError(cheating_parties));
         }
 
         // Finally assemble the signature
