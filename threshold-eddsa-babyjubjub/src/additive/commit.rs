@@ -13,6 +13,7 @@ use crate::{
 };
 use ark_ec::CurveGroup;
 use ark_ff::Zero;
+use ark_serialize::Valid;
 use eddsa_babyjubjub::{EdDSAPublicKey, EdDSASignature};
 use itertools::izip;
 use serde::{Deserialize, Serialize};
@@ -28,8 +29,16 @@ pub struct EdDSACommitmentsAdditive(pub(crate) EdDSACommitments);
 
 impl EdDSACommitmentsAdditive {
     /// Create an aggregated commitment object from component affine points and party IDs.
+    ///
+    /// # Panics
+    /// Panics if a commitment is invalid, or if party IDs are empty, zero, or duplicated.
     #[must_use]
     pub fn new(d: Affine, e: Affine, parties: Vec<u16>) -> Self {
+        assert!(
+            d.check().is_ok() && e.check().is_ok(),
+            "commitments must be valid subgroup points"
+        );
+        EdDSACommitments::validate_party_ids(&parties);
         let commitments = EdDSACommitments {
             d,
             e,
@@ -47,6 +56,9 @@ impl EdDSACommitmentsAdditive {
     /// Combine all parties' signature shares into a single `EdDSA` signature object.
     ///
     /// Must use the same order of contributing parties as in aggregation
+    ///
+    /// # Panics
+    /// Panics unless exactly one signature share is supplied per contributing party.
     #[must_use]
     pub fn sign_agg(
         self,
@@ -55,6 +67,11 @@ impl EdDSACommitmentsAdditive {
         message: BaseField,
         public_key: EdDSAPublicKey,
     ) -> EdDSASignature {
+        assert_eq!(
+            shares.len(),
+            self.0.contributing_parties.len(),
+            "one share is required per contributing party"
+        );
         self.0
             .sign_agg(session_id, shares.iter().map(|x| &x.0), message, public_key)
     }
@@ -84,6 +101,34 @@ impl EdDSACommitmentsAdditive {
             shares.len(),
             x_share_commitments.len(),
             "Shares and commitments must match"
+        );
+        assert_eq!(
+            shares.len(),
+            self.0.contributing_parties.len(),
+            "one share is required per contributing party"
+        );
+        EdDSACommitments::validate_party_ids(&self.0.contributing_parties);
+        let (individual_d, individual_e) = commitments.iter().fold(
+            (Projective::zero(), Projective::zero()),
+            |(d, e), commitment| (d + commitment.0.d, e + commitment.0.e),
+        );
+        assert_eq!(
+            individual_d.into_affine(),
+            self.0.d,
+            "individual and aggregate d commitments differ"
+        );
+        assert_eq!(
+            individual_e.into_affine(),
+            self.0.e,
+            "individual and aggregate e commitments differ"
+        );
+        let reconstructed_pk = x_share_commitments
+            .iter()
+            .fold(Projective::zero(), |acc, point| acc + point);
+        assert_eq!(
+            reconstructed_pk.into_affine(),
+            public_key.pk,
+            "public-key shares do not reconstruct the public key"
         );
         assert_eq!(
             shares.len(),
@@ -119,7 +164,7 @@ impl EdDSACommitmentsAdditive {
                 s,
                 c_,
             ) {
-                cheating_parties.push(id + 1);
+                cheating_parties.push(usize::from(self.0.contributing_parties[id]));
             }
         }
 
@@ -141,6 +186,8 @@ impl EdDSACommitmentsAdditive {
     /// The returned points are the combined commitments C, R.
     #[must_use]
     pub fn pre_agg(commitments: &[(u16, PartialEdDSACommitmentsAdditive)]) -> Self {
+        let party_ids = commitments.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        EdDSACommitments::validate_party_ids(&party_ids);
         let mut d = Projective::zero();
         let mut e = Projective::zero();
         let mut contributing_parties = Vec::with_capacity(commitments.len());

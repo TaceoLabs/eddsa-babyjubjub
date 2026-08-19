@@ -5,8 +5,10 @@
 //! coefficients of the senders, into its own share of the unchanged signing key.
 
 use crate::{
-    keygen::{MaliciousPartyError, finished::Finished},
-    reshare::{BroadcastMessage, PartyMessage, sender_set::ReShareSenderSet},
+    keygen::{MaliciousPartyError, finished::Finished, schnorr},
+    reshare::{
+        BroadcastMessage, PartyMessage, sender::ReShareProtocolSender, sender_set::ReShareSenderSet,
+    },
     shamir::utils,
 };
 use ark_ec::CurveGroup;
@@ -24,6 +26,8 @@ pub struct ReShareProtocolReceiver<C: CurveGroup> {
 }
 
 impl<C: CurveGroup> ReShareProtocolReceiver<C> {
+    const CONTEXT_DOMAIN: &'static [u8] = ReShareProtocolSender::<C>::CONTEXT_DOMAIN;
+
     /// Construct a [`ReShareProtocolReceiver`] for a party in the new set of parties with new index `my_idx`.
     ///
     /// # Errors
@@ -40,6 +44,7 @@ impl<C: CurveGroup> ReShareProtocolReceiver<C> {
         if my_idx > reshare_senders.new_parameters.number_of_parties {
             eyre::bail!("provided party index {my_idx} is larger than new parameters allow",);
         }
+        reshare_senders.correct()?;
 
         Ok(ReShareProtocolReceiver {
             my_idx,
@@ -103,7 +108,20 @@ impl<C: CurveGroup> ReShareProtocolReceiver<C> {
         let pk_share = self.reshare_senders.senders[&from];
 
         // verify ZK proof
-        if !commitments.nizk.verify(from, &pk_share) {
+        let context = schnorr::proof_context(
+            Self::CONTEXT_DOMAIN,
+            self.session_id,
+            &[
+                self.reshare_senders.old_parameters,
+                self.reshare_senders.new_parameters,
+            ],
+        );
+        if !commitments.nizk.verify(
+            &context,
+            from,
+            &commitments.commitments[0],
+            &commitments.commitments[1..],
+        ) {
             eyre::bail!(MaliciousPartyError::new(from as usize));
         }
 

@@ -6,6 +6,7 @@
 
 use crate::{keygen::Parameters, shamir::utils};
 use ark_ec::CurveGroup;
+use ark_serialize::Valid;
 use std::collections::BTreeMap;
 
 /// A struct representing the parties (and their public information) participating in a `ReShare` protocol run.
@@ -45,6 +46,12 @@ impl<C: CurveGroup> ReShareSenderSet<C> {
     /// Returns an error if the set of senders is already complete, i.e., if [`ReShareSenderSet::ready`]
     /// returns true, or if a party with the same `id` has been added before.
     pub fn add_party(&mut self, id: u16, pk_share: C::Affine) -> eyre::Result<()> {
+        if id == 0 || id > self.old_parameters.number_of_parties {
+            return Err(eyre::eyre!("Party id {id} is outside the old party set"));
+        }
+        if pk_share.check().is_err() {
+            return Err(eyre::eyre!("Public-key share for party {id} is invalid"));
+        }
         if self.ready() {
             return Err(eyre::eyre!(
                 "Cannot add party {} to ReShareSenderSet, already have enough parties",

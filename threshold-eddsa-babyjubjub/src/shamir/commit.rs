@@ -13,6 +13,7 @@ use crate::{
 };
 use ark_ec::CurveGroup;
 use ark_ff::Zero;
+use ark_serialize::Valid;
 use eddsa_babyjubjub::{EdDSAPublicKey, EdDSASignature};
 use itertools::izip;
 use serde::{Deserialize, Serialize};
@@ -29,8 +30,16 @@ pub struct EdDSACommitmentsShamir(pub(crate) EdDSACommitments);
 
 impl EdDSACommitmentsShamir {
     /// Create an aggregated commitment object from component affine points and party IDs.
+    ///
+    /// # Panics
+    /// Panics if a commitment is invalid, or if party IDs are empty, zero, or duplicated.
     #[must_use]
     pub fn new(d: Affine, e: Affine, parties: Vec<u16>) -> Self {
+        assert!(
+            d.check().is_ok() && e.check().is_ok(),
+            "commitments must be valid subgroup points"
+        );
+        EdDSACommitments::validate_party_ids(&parties);
         let commitments = EdDSACommitments {
             d,
             e,
@@ -48,6 +57,9 @@ impl EdDSACommitmentsShamir {
     /// Combine all parties' signature shares into a single `EdDSA` signature object.
     ///
     /// Must use the same order of contributing parties as in aggregation
+    ///
+    /// # Panics
+    /// Panics unless exactly one signature share is supplied per contributing party.
     #[must_use]
     pub fn sign_agg(
         self,
@@ -56,6 +68,11 @@ impl EdDSACommitmentsShamir {
         message: BaseField,
         public_key: EdDSAPublicKey,
     ) -> EdDSASignature {
+        assert_eq!(
+            shares.len(),
+            self.0.contributing_parties.len(),
+            "one share is required per contributing party"
+        );
         self.0
             .sign_agg(session_id, shares.iter().map(|x| &x.0), message, public_key)
     }
@@ -63,20 +80,16 @@ impl EdDSACommitmentsShamir {
     /// Combine all parties' signature shares into a single `EdDSA` signature object, verifying
     /// each party's contribution individually so that malformed shares can be attributed.
     ///
-    /// The order of `shares`, `commitments`, and `x_share_commitments` must match the order of the
-    /// Lagrange coefficients.
+    /// The order of `shares`, `commitments`, and `x_share_commitments` must match
+    /// `contributing_parties`. Lagrange coefficients are derived internally.
     ///
     /// # Errors
     /// Returns a [`MaliciousPartiesError`] with the IDs of all parties whose signature share does
     /// not verify against their commitment and their Lagrange-weighted share of the public key.
     ///
     /// # Panics
-    /// Panics if `shares`, `x_share_commitments`, `commitments` and `lagrange_coefficients` do not
-    /// all have the same length. The call site is expected to enforce this.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Keeps consistency with the additive version of this function"
-    )]
+    /// Panics if the supplied vectors do not match the validated contributing-party set, or if
+    /// their individual public values do not reconstruct the stored aggregates.
     pub fn sign_agg_with_identifiable_abort(
         self,
         session_id: Uuid,
@@ -85,7 +98,6 @@ impl EdDSACommitmentsShamir {
         public_key: &EdDSAPublicKey,
         x_share_commitments: &[Affine],
         commitments: &[PartialEdDSACommitmentsShamir],
-        lagrange_coefficients: &[ScalarField],
     ) -> Result<EdDSASignature, MaliciousPartiesError> {
         assert_eq!(
             shares.len(),
@@ -99,8 +111,45 @@ impl EdDSACommitmentsShamir {
         );
         assert_eq!(
             shares.len(),
-            lagrange_coefficients.len(),
-            "Shares and lagrange coefficients must match"
+            self.0.contributing_parties.len(),
+            "one share is required per contributing party"
+        );
+        EdDSACommitments::validate_party_ids(&self.0.contributing_parties);
+        let lagrange_coefficients = self
+            .0
+            .contributing_parties
+            .iter()
+            .map(|party| {
+                crate::shamir::utils::single_lagrange_from_coeff::<ScalarField, _>(
+                    *party,
+                    &self.0.contributing_parties,
+                )
+            })
+            .collect::<Vec<_>>();
+        let (individual_d, individual_e) = commitments.iter().fold(
+            (Projective::zero(), Projective::zero()),
+            |(d, e), commitment| (d + commitment.0.d, e + commitment.0.e),
+        );
+        assert_eq!(
+            individual_d.into_affine(),
+            self.0.d,
+            "individual and aggregate d commitments differ"
+        );
+        assert_eq!(
+            individual_e.into_affine(),
+            self.0.e,
+            "individual and aggregate e commitments differ"
+        );
+        let reconstructed_pk = x_share_commitments
+            .iter()
+            .zip(&lagrange_coefficients)
+            .fold(Projective::zero(), |acc, (point, lambda)| {
+                acc + *point * lambda
+            });
+        assert_eq!(
+            reconstructed_pk.into_affine(),
+            public_key.pk,
+            "public-key shares do not reconstruct the public key"
         );
 
         let (r, b) = crate::nonce::combine_two_nonce_randomness(CombineTwoNonceRandomnessArgs {
@@ -124,7 +173,7 @@ impl EdDSACommitmentsShamir {
             shares,
             x_share_commitments,
             commitments,
-            lagrange_coefficients
+            &lagrange_coefficients
         )
         .enumerate()
         {
@@ -166,14 +215,7 @@ impl EdDSACommitmentsShamir {
         commitments: &[PartialEdDSACommitmentsShamir],
         contributing_parties: Vec<u16>,
     ) -> Self {
-        let mut contributing_parties_dedup = contributing_parties.clone();
-        contributing_parties_dedup.sort_unstable();
-        contributing_parties_dedup.dedup();
-        assert_eq!(
-            contributing_parties.len(),
-            contributing_parties_dedup.len(),
-            "Party IDs must be unique"
-        );
+        EdDSACommitments::validate_party_ids(&contributing_parties);
         assert_eq!(
             contributing_parties.len(),
             commitments.len(),

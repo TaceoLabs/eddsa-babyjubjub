@@ -10,7 +10,32 @@ pub mod schnorr;
 #[cfg(test)]
 pub mod test;
 
+use ark_ff::PrimeField;
 use serde::{Deserialize, Serialize};
+use std::ops::{Deref, DerefMut};
+use zeroize::Zeroize;
+
+pub(crate) struct SecretScalars<F: PrimeField>(pub(crate) Vec<F>);
+
+impl<F: PrimeField> Deref for SecretScalars<F> {
+    type Target = [F];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<F: PrimeField> DerefMut for SecretScalars<F> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<F: PrimeField> Drop for SecretScalars<F> {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
 
 /// The parameters of a DKG protocol run, which must be the same for all participating parties.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,9 +49,11 @@ impl Parameters {
     /// `threshold` parties are required to reconstruct the key.
     ///
     /// # Panics
-    /// Panics if `threshold` is larger than `number_of_parties`.
+    /// Panics unless `1 <= threshold <= number_of_parties`.
     #[must_use]
     pub fn new(number_of_parties: u16, threshold: u16) -> Self {
+        assert!(number_of_parties > 0, "Number of parties must be non-zero");
+        assert!(threshold > 0, "Threshold must be non-zero");
         assert!(
             threshold <= number_of_parties,
             "Threshold must not be larger than the number of parties"

@@ -5,8 +5,9 @@
 
 use crate::{
     keygen::{
-        DuplicateCommitmentsError, MaliciousPartyError, Parameters, round2::RoundTwo,
-        schnorr::SchnorrZkProof,
+        DuplicateCommitmentsError, MaliciousPartyError, Parameters, SecretScalars,
+        round2::RoundTwo,
+        schnorr::{self, SchnorrZkProof},
     },
     shamir::utils,
 };
@@ -26,7 +27,7 @@ use uuid::Uuid;
 /// same information from all other parties.
 pub struct RoundOne<C: CurveGroup> {
     session_id: Uuid,
-    coefficients: Vec<C::ScalarField>,
+    coefficients: SecretScalars<C::ScalarField>,
     commitments: Vec<C::Affine>,
     nizk: SchnorrZkProof<C>,
     my_idx: u16,
@@ -44,6 +45,8 @@ pub struct RoundOneBroadcast<C: CurveGroup> {
 }
 
 impl<C: CurveGroup> RoundOne<C> {
+    const CONTEXT_DOMAIN: &'static [u8] = b"PEDPOP_DKG_V1";
+
     /// Begin a new instance of the distributed key generation protocol.
     /// The provided [`Parameters`] must be the same for all participating parties.
     /// Each party must have a distinct `party_index`, ranging from 1 to `params.number_of_parties`, inclusively.
@@ -65,16 +68,26 @@ impl<C: CurveGroup> RoundOne<C> {
             eyre::bail!("provided party index {party_index} is larger than parameters allow",);
         }
 
-        let coefficients = (0..=parameters.degree())
-            .map(|_| C::ScalarField::rand(rng))
-            .collect::<Vec<_>>();
+        let coefficients = SecretScalars(
+            (0..=parameters.degree())
+                .map(|_| C::ScalarField::rand(rng))
+                .collect::<Vec<_>>(),
+        );
 
         let commitments = coefficients
             .iter()
             .map(|a_k| (C::generator() * a_k).into_affine())
             .collect::<Vec<_>>();
 
-        let nizk = SchnorrZkProof::<C>::new(party_index, &coefficients[0], &commitments[0], rng);
+        let context = schnorr::proof_context(Self::CONTEXT_DOMAIN, session_id, &[parameters]);
+        let nizk = SchnorrZkProof::<C>::new(
+            &context,
+            party_index,
+            &coefficients[0],
+            &commitments[0],
+            &commitments[1..],
+            rng,
+        );
 
         let num_parties = parameters.number_of_parties;
 
@@ -130,7 +143,11 @@ impl<C: CurveGroup> RoundOne<C> {
         }
 
         // verify ZK proof
-        if !comm.nizk.verify(from, &comm.commitments[0]) {
+        let context = schnorr::proof_context(Self::CONTEXT_DOMAIN, self.session_id, &[self.params]);
+        if !comm
+            .nizk
+            .verify(&context, from, &comm.commitments[0], &comm.commitments[1..])
+        {
             eyre::bail!(MaliciousPartyError::new(from as usize));
         }
 
@@ -192,7 +209,7 @@ impl<C: CurveGroup> RoundOne<C> {
             session_id: self.session_id,
             received_party_messages: HashMap::with_capacity(commitments.len() - 1),
             commitments,
-            secret_shares,
+            secret_shares: SecretScalars(secret_shares),
             my_idx: self.my_idx,
             params: self.params,
         })

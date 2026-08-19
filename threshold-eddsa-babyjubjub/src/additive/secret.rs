@@ -14,9 +14,7 @@ use zeroize::ZeroizeOnDrop;
 /// Serializable so it can be persisted via a secret manager.
 /// Not `Debug`/`Display` to avoid accidental leaks.
 ///
-#[derive(
-    Clone, Serialize, Deserialize, ZeroizeOnDrop, CanonicalSerialize, CanonicalDeserialize,
-)]
+#[derive(Serialize, Deserialize, ZeroizeOnDrop, CanonicalSerialize, CanonicalDeserialize)]
 #[serde(transparent)]
 pub struct DLogShareAdditive(#[serde(with = "ark_serde_compat::field")] pub(crate) ScalarField);
 

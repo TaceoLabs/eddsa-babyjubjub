@@ -45,7 +45,7 @@ impl EdDSASessionShamir {
     pub fn sign_round(
         self,
         session_id: Uuid,
-        DLogShareShamir(x_share): DLogShareShamir,
+        x_share: &DLogShareShamir,
         message: BaseField,
         public_key: &EdDSAPublicKey,
         EdDSACommitmentsShamir(challenge_input): EdDSACommitmentsShamir,
@@ -66,7 +66,7 @@ impl EdDSASessionShamir {
 
         // The following modular reduction in convert_base_to_scalar is required in rust to perform the scalar multiplications. Using all 254 bits of the base field in a double/add ladder would apply this reduction implicitly. We show in the docs of convert_base_to_scalar why this does not introduce a bias when applied to a uniform element of the base field.
         let c_ = eddsa_babyjubjub::convert_base_to_scalar(c);
-        let share = EdDSASigShare(self.0.d + b * self.0.e + lagrange_coefficient * c_ * x_share);
+        let share = EdDSASigShare(self.0.d + b * self.0.e + lagrange_coefficient * c_ * x_share.0);
         EdDSASigShareShamir(share)
     }
 }

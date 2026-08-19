@@ -56,7 +56,7 @@ fn test_distributed_eddsa(num_parties: usize, cheating_parties: &[usize]) {
 
     // 3) Aggregator challenges all servers
     let mut signatures = Vec::with_capacity(num_parties);
-    for (session, x_) in sessions.into_iter().zip(x_shares.iter().cloned()) {
+    for (session, x_) in sessions.into_iter().zip(x_shares.iter()) {
         let signature = session.sign_round(session_id, x_, message, &public_key, challenge.clone());
         signatures.push(signature);
     }

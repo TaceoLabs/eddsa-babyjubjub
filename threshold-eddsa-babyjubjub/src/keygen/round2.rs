@@ -4,7 +4,7 @@
 //! private channel, which the receiving party verifies against the commitments from the first round.
 
 use crate::{
-    keygen::{MaliciousPartyError, Parameters, finished::Finished},
+    keygen::{MaliciousPartyError, Parameters, SecretScalars, finished::Finished},
     shamir::utils,
 };
 use ark_ec::CurveGroup;
@@ -21,7 +21,7 @@ use uuid::Uuid;
 pub struct RoundTwo<C: CurveGroup> {
     pub(crate) session_id: Uuid,
     pub(crate) commitments: HashMap<u16, Vec<C::Affine>>,
-    pub(crate) secret_shares: Vec<C::ScalarField>,
+    pub(crate) secret_shares: SecretScalars<C::ScalarField>,
     pub(crate) my_idx: u16,
     pub(crate) params: Parameters,
     pub(crate) received_party_messages: HashMap<u16, C::ScalarField>,

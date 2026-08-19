@@ -5,7 +5,10 @@
 //! coefficients, and sends its evaluations to the parties in the new set.
 
 use crate::{
-    keygen::schnorr::SchnorrZkProof,
+    keygen::{
+        SecretScalars,
+        schnorr::{self, SchnorrZkProof},
+    },
     reshare::{BroadcastMessage, PartyMessage, sender_set::ReShareSenderSet},
     shamir::utils,
 };
@@ -21,13 +24,15 @@ use uuid::Uuid;
 /// The `ReShare` protocol lets the "old" parties re-share their secret key to a new set of parties (which may be overlapping the current set of parties.)
 pub struct ReShareProtocolSender<C: CurveGroup> {
     session_id: Uuid,
-    coefficients: Vec<C::ScalarField>,
+    coefficients: SecretScalars<C::ScalarField>,
     commitments: Vec<C::Affine>,
     nizk: SchnorrZkProof<C>,
     reshare_set: ReShareSenderSet<C>,
 }
 
 impl<C: CurveGroup> ReShareProtocolSender<C> {
+    pub(super) const CONTEXT_DOMAIN: &'static [u8] = b"PEDPOP_RESHARE_V1";
+
     /// Construct a new [`ReShareProtocolSender`] for the old party with index `party_index`.
     ///
     /// `my_share` is this party's Shamir share of the signing key as held under the old
@@ -52,17 +57,35 @@ impl<C: CurveGroup> ReShareProtocolSender<C> {
         if party_index > old_params.number_of_parties {
             eyre::bail!("provided party index {party_index} is larger than old parameters allow",);
         }
+        reshare_set.correct()?;
+        let Some(expected_public_share) = reshare_set.senders.get(&party_index) else {
+            eyre::bail!("party index {party_index} is not a selected reshare sender");
+        };
+        if (C::generator() * my_share).into_affine() != *expected_public_share {
+            eyre::bail!("secret share does not match party {party_index}'s public share");
+        }
 
-        let coefficients = std::iter::once(*my_share)
-            .chain((1..=new_params.degree()).map(|_| C::ScalarField::rand(rng)))
-            .collect::<Vec<_>>();
+        let coefficients = SecretScalars(
+            std::iter::once(*my_share)
+                .chain((1..=new_params.degree()).map(|_| C::ScalarField::rand(rng)))
+                .collect::<Vec<_>>(),
+        );
 
         let commitments = coefficients
             .iter()
             .map(|a_k| (C::generator() * a_k).into_affine())
             .collect::<Vec<_>>();
 
-        let nizk = SchnorrZkProof::<C>::new(party_index, &coefficients[0], &commitments[0], rng);
+        let context =
+            schnorr::proof_context(Self::CONTEXT_DOMAIN, session_id, &[old_params, new_params]);
+        let nizk = SchnorrZkProof::<C>::new(
+            &context,
+            party_index,
+            &coefficients[0],
+            &commitments[0],
+            &commitments[1..],
+            rng,
+        );
 
         Ok(ReShareProtocolSender {
             session_id,

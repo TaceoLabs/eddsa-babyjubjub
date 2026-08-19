@@ -63,6 +63,21 @@ impl EdDSACommitments {
 
         EdDSASignature { r, s }
     }
+
+    pub(crate) fn validate_party_ids(parties: &[u16]) {
+        assert!(
+            !parties.is_empty(),
+            "at least one contributing party is required"
+        );
+        assert!(
+            parties.iter().all(|id| *id != 0),
+            "party IDs must be non-zero"
+        );
+        let mut unique = parties.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), parties.len(), "party IDs must be unique");
+    }
 }
 
 // This is modelled after the `verify` function in `eddsa-babyjubjub/src/lib.rs`, but it takes the challenge as input

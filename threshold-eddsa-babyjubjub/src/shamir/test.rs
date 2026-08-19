@@ -74,14 +74,13 @@ pub(crate) fn test_threshold_eddsa_inner<R: Rng + CryptoRng>(
 
     // 3) Aggregator challenges used used parties
     let mut used_sigs = Vec::with_capacity(num_parties);
-    let mut lagrange_coefficients = Vec::with_capacity(num_parties);
 
     for server_idx in &used_parties {
         // we just use an option here in tests to be able to move out of the vector since the session is consumed
         let session = sessions[*server_idx as usize - 1]
             .take()
             .expect("have not used this session before");
-        let x_ = x_shares[*server_idx as usize - 1].clone();
+        let x_ = &x_shares[*server_idx as usize - 1];
         let lagrange = utils::single_lagrange_from_coeff(*server_idx, &used_parties);
         let proof = session.sign_round(
             session_id,
@@ -92,7 +91,6 @@ pub(crate) fn test_threshold_eddsa_inner<R: Rng + CryptoRng>(
             lagrange,
         );
         used_sigs.push(proof);
-        lagrange_coefficients.push(lagrange);
     }
 
     for &position in cheating_positions {
@@ -119,7 +117,6 @@ pub(crate) fn test_threshold_eddsa_inner<R: Rng + CryptoRng>(
         public_key,
         &used_public_key_shares,
         &used_commitments,
-        &lagrange_coefficients,
     );
 
     if cheating_positions.is_empty() {

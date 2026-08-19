@@ -6,6 +6,7 @@
 use ark_ec::CurveGroup;
 use std::collections::HashMap;
 use uuid::Uuid;
+use zeroize::Zeroize;
 
 /// The state of the DKG protocol after it has finished, holding the results of the protocol.
 #[expect(
@@ -23,4 +24,10 @@ pub struct Finished<C: CurveGroup> {
     pub pk_shares: HashMap<u16, C::Affine>,
     /// The public key belonging to the jointly generated signing key.
     pub pk: C::Affine,
+}
+
+impl<C: CurveGroup> Drop for Finished<C> {
+    fn drop(&mut self) {
+        self.sk_share.zeroize();
+    }
 }
