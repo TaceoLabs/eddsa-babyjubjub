@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 fn share<R: Rng>(
     secret: ScalarField,
+    public_key: &EdDSAPublicKey,
     num_shares: usize,
     degree: usize,
     rng: &mut R,
@@ -34,6 +35,7 @@ fn share<R: Rng>(
         shares.push(
             DLogShareShamir::new(
                 share,
+                public_key,
                 u16::try_from(i).expect("party ID fits"),
                 u16::try_from(num_shares).expect("party count fits"),
                 u16::try_from(degree + 1).expect("threshold fits"),
@@ -92,7 +94,7 @@ pub(crate) fn test_threshold_eddsa_inner<R: Rng + CryptoRng>(
             .expect("have not used this session before");
         let x_ = &x_shares[*server_idx as usize - 1];
         let proof = session
-            .sign_round(session_id, x_, message, public_key, challenge.clone())
+            .sign_round(session_id, x_, message, challenge.clone())
             .expect("valid signing package");
         used_sigs.push(proof);
     }
@@ -136,9 +138,8 @@ pub(crate) fn test_threshold_eddsa_inner<R: Rng + CryptoRng>(
         match result {
             Err(error) => assert_eq!(
                 error
-                    .downcast::<crate::MaliciousPartiesError>()
-                    .expect("malicious-party error")
-                    .into_inner(),
+                    .into_malicious_parties()
+                    .expect("the abort must attribute blame, not report bad input"),
                 expected,
             ),
             Ok(_) => panic!("cheating parties must be identified"),
@@ -152,18 +153,18 @@ fn test_threshold_eddsa(num_parties: usize, degree: usize, cheating_positions: &
 
     let message = BaseField::rand(&mut rng);
     let x = ScalarField::rand(&mut rng);
-    let x_shares = share(x, num_parties, degree, &mut rng);
+    let public_key = EdDSAPublicKey {
+        pk: (Affine::generator() * x).into_affine(),
+    };
+    let x_shares = share(x, &public_key, num_parties, degree, &mut rng);
 
-    // Create public keys
-    let public_key = (Affine::generator() * x).into_affine();
     let public_key_shares = x_shares
         .iter()
         .map(|x| Affine::generator() * x.value)
         .collect::<Vec<_>>();
     let public_key_ =
         utils::test_utils::reconstruct_random_pointshares(&public_key_shares, degree, &mut rng);
-    assert_eq!(public_key, public_key_);
-    let public_key = EdDSAPublicKey { pk: public_key };
+    assert_eq!(public_key.pk, public_key_);
 
     let public_key_shares = public_key_shares
         .iter()
@@ -221,30 +222,76 @@ fn signer_rejects_mismatched_identity_and_insufficient_sets() {
     let (session, commitment) = EdDSASessionShamir::pre_round(1, &mut rng).expect("valid party ID");
     let aggregate =
         EdDSACommitmentsShamir::pre_agg(&[commitment]).expect("valid single-party commitment set");
-    let other_party_share = DLogShareShamir::new(ScalarField::rand(&mut rng), 2, 2, 1)
+    let other_party_share = DLogShareShamir::new(ScalarField::rand(&mut rng), &public_key, 2, 2, 1)
         .expect("valid metadata for another party");
-    let Err(_) = session.sign_round(
-        Uuid::new_v4(),
-        &other_party_share,
-        message,
-        &public_key,
-        aggregate,
-    ) else {
+    let Err(_) =
+        session.sign_round(Uuid::new_v4(), &other_party_share, message, aggregate)
+    else {
         panic!("a nonce session must not sign for another key-share identity");
     };
 
     let (session, commitment) = EdDSASessionShamir::pre_round(1, &mut rng).expect("valid party ID");
     let aggregate =
         EdDSACommitmentsShamir::pre_agg(&[commitment]).expect("valid single-party commitment set");
-    let two_party_threshold_share = DLogShareShamir::new(ScalarField::rand(&mut rng), 1, 2, 2)
-        .expect("valid two-party threshold metadata");
-    let Err(_) = session.sign_round(
-        Uuid::new_v4(),
-        &two_party_threshold_share,
-        message,
-        &public_key,
-        aggregate,
-    ) else {
+    let two_party_threshold_share =
+        DLogShareShamir::new(ScalarField::rand(&mut rng), &public_key, 1, 2, 2)
+            .expect("valid two-party threshold metadata");
+    let Err(_) =
+        session.sign_round(Uuid::new_v4(), &two_party_threshold_share, message, aggregate)
+    else {
         panic!("a signer must reject a set below its bound threshold");
+    };
+}
+
+/// A key share is bound to the public key it belongs to, and deserialization enforces that binding
+/// and the committee metadata rather than deferring it to the signing path.
+#[test]
+fn key_share_deserialization_enforces_its_binding() {
+    let mut rng = rand::thread_rng();
+    let public_key = EdDSAPublicKey {
+        pk: (Affine::generator() * ScalarField::rand(&mut rng)).into_affine(),
+    };
+    let share = DLogShareShamir::new(ScalarField::rand(&mut rng), &public_key, 2, 3, 2)
+        .expect("valid share metadata");
+    let encoded = serde_json::to_value(&share).expect("share serializes");
+    let round_tripped = serde_json::from_value::<DLogShareShamir>(encoded.clone())
+        .expect("an honest share round-trips");
+    assert_eq!(round_tripped.public_key, public_key.pk);
+    assert_eq!(round_tripped.party_id(), 2);
+    assert_eq!(round_tripped.threshold(), 2);
+
+    let tamper = |field: &str, value: serde_json::Value| {
+        let mut encoded = encoded.clone();
+        encoded[field] = value;
+        serde_json::from_value::<DLogShareShamir>(encoded)
+    };
+    let Err(_) = tamper("party_id", 0.into()) else {
+        panic!("a zero party ID must be rejected");
+    };
+    let Err(_) = tamper("party_id", 4.into()) else {
+        panic!("a party ID outside the committee must be rejected");
+    };
+    let Err(_) = tamper("threshold", 0.into()) else {
+        panic!("a zero threshold must be rejected");
+    };
+    let Err(_) = tamper("threshold", 4.into()) else {
+        panic!("a threshold above the party count must be rejected");
+    };
+    // The neutral element (0, 1) is on the curve and in the prime-order subgroup, so the subgroup
+    // check alone accepts it; the explicit non-zero check is what rejects it.
+    let identity = serde_json::json!(["0", "1"]);
+    let Err(_) = tamper("public_key", identity) else {
+        panic!("an identity public key must be rejected");
+    };
+
+    // The share carries the key, so the signer cannot be pointed at a different one.
+    let Err(_) = DLogShareShamir::new(
+        ScalarField::rand(&mut rng),
+        &EdDSAPublicKey { pk: Affine::zero() },
+        1,
+        3,
+        2,
+    ) else {
+        panic!("a share must not be bound to a small-order public key");
     };
 }

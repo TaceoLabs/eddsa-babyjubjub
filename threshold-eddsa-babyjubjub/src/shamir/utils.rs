@@ -78,11 +78,17 @@ pub fn evaluate_poly<F: PrimeField>(poly: &[F], x: F) -> F {
     eval
 }
 
+/// Evaluates a committed polynomial in the exponent at a party index.
+///
+/// # Panics
+/// Panics if `party_idx` is zero or `coefficients` is empty. A zero index would return the
+/// commitment to the constant term, which in the reshare protocol is the sender's secret key
+/// share, so this must never be a silent no-op in release builds.
 pub fn evaluate_polynomial_in_exponent<C: CurveGroup>(
     coefficients: &[C::Affine],
     party_idx: u16,
 ) -> C {
-    debug_assert!(party_idx > 0, "party index must be non-zero");
+    assert!(party_idx > 0, "party index must be non-zero");
     // since the party index is non-zero, this is non zero
     let x = C::ScalarField::from(party_idx);
 
@@ -103,11 +109,18 @@ pub fn evaluate_polynomial_in_exponent<C: CurveGroup>(
     result
 }
 
+/// Checks a private polynomial evaluation against the public coefficient commitments.
+///
+/// A zero `party_idx` or an empty commitment vector is rejected rather than evaluated, so a
+/// malformed index can never make a share equal to the constant term verify.
 pub fn verify_polynomial_evaluation<C: CurveGroup>(
     commitments: &[C::Affine],
     party_idx: u16,
     share: &C::ScalarField,
 ) -> bool {
+    if party_idx == 0 || commitments.is_empty() {
+        return false;
+    }
     let result = evaluate_polynomial_in_exponent::<C>(commitments, party_idx);
     result == C::generator() * share
 }

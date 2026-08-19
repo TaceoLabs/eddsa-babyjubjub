@@ -15,7 +15,6 @@ use crate::{
     },
     signature::EdDSASigShare,
 };
-use eddsa_babyjubjub::EdDSAPublicKey;
 use rand::{CryptoRng, Rng};
 use uuid::Uuid;
 use zeroize::ZeroizeOnDrop;
@@ -44,8 +43,9 @@ impl EdDSASessionShamir {
     /// Finalizes a signature share for a given challenge hash and session.
     /// The session and information therein is consumed to prevent reuse of the randomness.
     ///
-    /// The Lagrange coefficient is derived internally from the identity-bound key share and the
-    /// canonical contributing set.
+    /// The Lagrange coefficient and the public key are both derived from the identity-bound key
+    /// share rather than taken as arguments, so the signer never signs against a committee or a key
+    /// it cannot check.
     ///
     /// # Errors
     /// Returns an error if the key-share metadata is invalid, the signing set is non-canonical,
@@ -56,9 +56,9 @@ impl EdDSASessionShamir {
         session_id: Uuid,
         x_share: &DLogShareShamir,
         message: BaseField,
-        public_key: &EdDSAPublicKey,
         EdDSACommitmentsShamir(challenge_input): EdDSACommitmentsShamir,
     ) -> eyre::Result<EdDSASigShareShamir> {
+        let public_key = x_share.public_key();
         let parties = &challenge_input.contributing_parties;
         crate::commit::EdDSACommitments::validate_party_ids(parties)?;
         if x_share.party_id == 0
@@ -92,7 +92,7 @@ impl EdDSASessionShamir {
             public_key: public_key.clone(),
             d: challenge_input.d,
             e: challenge_input.e,
-            parties: &challenge_input.contributing_parties,
+            parties,
         });
 
         // Recompute the challenge hash to ensure the challenge is well-formed.

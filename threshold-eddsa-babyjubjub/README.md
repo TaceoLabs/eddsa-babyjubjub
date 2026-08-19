@@ -66,7 +66,8 @@ only by an unauthenticated transport.
 | Reshare sender set, old/new parameters, public key, public-key shares, and session ID | **Global agreement before starting** | Every old sender and new receiver must execute the same handover. |
 | Reshare polynomial commitments and proof of possession | **Reliable broadcast from each selected old sender to every new party** | A sender must not equivocate about the polynomial against which private evaluations are checked. |
 | Reshare polynomial evaluations | **Private, authenticated point-to-point channel** | Each new party receives a different secret evaluation. |
-| Reshare complaint verdicts and old-sender revelations | **Reliable broadcast to every new party** | Every new party must derive the same surviving sender set and public output. |
+| Reshare complaint verdicts | **Reliable broadcast to every new party _and_ to every selected old sender** | Every new party must derive the same surviving sender set and public output. An accused old sender derives from these verdicts which evaluations it must reveal, so a sender that accepts unauthenticated verdicts can be induced to publish evaluations of a polynomial whose constant term is its own secret key share. |
+| Reshare old-sender revelations | **Reliable broadcast to every new party** | Every new party must apply the same revelation or disqualification. |
 | Missing-message, verdict, and revelation timeout decisions | **Externally coordinated agreement** | Every honest participant must apply the same disqualification or verdict-exclusion set. |
 
 Reliable broadcast means more than best-effort multicast. In particular, if one
@@ -86,7 +87,10 @@ The primary API is in the `shamir` module:
   and rejects empty or duplicate sets.
 - Each selected party consumes its session with
   `EdDSASessionShamir::sign_round`. The signer validates its identity and
-  committee metadata and derives its Lagrange coefficient internally.
+  committee metadata and derives both its Lagrange coefficient and the public key
+  internally, from the `DLogShareShamir` it was given. `sign_round` takes no
+  public key argument, so a signer cannot be pointed at a key it does not hold a
+  share of.
 - The aggregator calls `sign_agg` or, when public-key shares and individual
   commitments are available, `sign_agg_with_identifiable_abort`.
 
@@ -109,6 +113,19 @@ authenticate application-provided public-key metadata. Prefer
 `sign_agg_with_identifiable_abort` when an invalid share must be attributed;
 plain `sign_agg` only combines shares and may therefore return a signature that
 does not verify if a participant supplied a malformed share.
+
+`sign_agg_with_identifiable_abort` fails with `IdentifiableAbortError`, which
+separates the two outcomes that must not be conflated:
+`MaliciousParties` names the parties whose share failed validation, while
+`InvalidInput` means the aggregator's own inputs were inconsistent, so nothing
+was validated and nobody may be accused. Read the attribution with
+`IdentifiableAbortError::malicious_parties`; logging the error alone discards it.
+
+A `DLogShareShamir` binds its scalar to a party ID, the committee size, the
+threshold, and the public key. Build it with `DLogShareShamir::new`, which
+rejects out-of-range metadata and a small-order public key; deserialization
+enforces the same invariants, so a persisted share cannot be loaded with its
+binding altered.
 
 ### Nonce and session safety
 
@@ -145,6 +162,31 @@ its `revelation()`. Missing revelations may be resolved with
 `disqualify_missing_dealer`, but only after an externally agreed deadline that
 all honest parties apply identically. `BlameRound::finalize` excludes
 disqualified dealers and reports their IDs.
+
+`revelation()` derives its accuser set from the collected verdicts rather than
+from a caller-supplied list, so a dealer never answers a party that did not
+complain. It also refuses once the accuser set reaches the threshold, since that
+many evaluations determine the dealer's whole polynomial. Under the `t - 1`
+corruption bound this cannot occur for an honest dealer, because an honest party
+never accuses one.
+
+An accused dealer must feed its own revelation back through `add_revelation`, as
+the broadcast channel delivered it, just as every other party does. `revelation()
+` does not mark the dealer resolved by itself. Otherwise a dealer whose broadcast
+was corrupted or truncated in transit would judge itself qualified while everyone
+else disqualified it, and would silently finalize onto a key nobody else uses.
+
+Following PedPoP, a dealer disqualified in the blame round has its _contribution_
+dropped from the aggregate but remains a shareholder: it completed round two, so
+it holds every qualified dealer's evaluation and can derive its share of the
+surviving polynomial regardless of what the honest parties record. It therefore
+keeps a `pk_shares` entry and `finalize()` returns its share. Its ID is still
+listed in `BlameResult::disqualified_parties`; exclude a proven cheater from
+future signing committees at the application layer if that is the intent.
+Round-one disqualifications are different: those parties never reached round two,
+so they are not shareholders and hold nothing. Every disqualification API refuses
+the decision that would leave fewer than `t` parties, so a run can never silently
+produce an unusable key.
 
 If a selected dealer's private round-two evaluation never arrives, call
 `complain_missing_party` after an externally agreed delivery deadline, then
@@ -186,6 +228,18 @@ reliable broadcast. Apply `disqualify_missing_sender` only from a common timeout
 decision. Finalization recomputes Lagrange coefficients over the surviving old
 senders, requires at least the old threshold to remain, and checks that their
 constant commitments still reconstruct the original public key.
+
+Every selected old sender must receive the new parties' verdicts too, and feed
+them to its `ReShareProtocolSender` with `add_verdict` (plus
+`exclude_missing_verdict` for the same externally agreed timeouts the receivers
+apply). `get_blame_revelation()` then derives the accuser set from those
+verdicts; it takes no accuser argument, so a party that did not complain is
+never answered. The constant term of a sender's resharing polynomial is its own
+secret key share, so `get_blame_revelation()` also refuses once the accuser set
+reaches the new threshold: at that point the revelation would let any observer
+interpolate the share, while the accusers — if honest — already hold enough new
+shares to reconstruct the key anyway. Being disqualified for a missing
+revelation is always preferable to disclosing the share.
 
 When a valid sender broadcast arrives but its private evaluation does not, use
 `complain_missing_share` to enter blame and request a public revelation. When

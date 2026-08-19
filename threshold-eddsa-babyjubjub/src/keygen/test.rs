@@ -183,7 +183,13 @@ fn test_keygen_and_sign(num_parties: u16, threshold: u16, cheating_positions: &[
         .iter()
         .enumerate()
         .map(|(position, party)| {
-            DLogShareShamir::new(party.sk_share, party_id(position), num_parties, threshold)
+            DLogShareShamir::new(
+                party.sk_share,
+                &public_key,
+                party_id(position),
+                num_parties,
+                threshold,
+            )
                 .expect("valid DKG signing share metadata")
         })
         .collect::<Vec<_>>();
@@ -509,11 +515,11 @@ fn run_optional_blame_round(mode: BlameTestMode, num_parties: u16, threshold: u1
             .shares[0]
             .share += crate::ScalarField::one();
     }
-    for (receiver, state) in blame_rounds.iter_mut().take(completing_parties).enumerate() {
+    // Reliable broadcast means the accused dealer sees its own revelation exactly as the others do,
+    // so it judges itself with the same rule and reaches the same verdict.
+    for state in blame_rounds.iter_mut().take(completing_parties) {
         for (dealer, revelation) in revelations.iter().enumerate() {
-            if receiver != dealer
-                && let Some(revelation) = revelation
-            {
+            if let Some(revelation) = revelation {
                 state
                     .add_revelation(party_id(dealer), revelation)
                     .expect("accused dealer's public revelation is processed");
@@ -543,32 +549,34 @@ fn run_optional_blame_round(mode: BlameTestMode, num_parties: u16, threshold: u1
     } else {
         vec![1]
     };
-    if mode == BlameTestMode::Missing {
-        for disqualified in &expected_disqualified {
-            let Err(_) = &results[usize::from(*disqualified) - 1] else {
-                panic!("a disqualified participant must not finalize");
-            };
-        }
-    }
-    let honest_results = results
+    // A blame-round disqualification drops the dealer's polynomial contribution, not its standing as
+    // a shareholder: it completed round two, so it can compute its share of the surviving aggregate
+    // polynomial either way. Every party that reached the blame round therefore finalizes, and all of
+    // them — the disqualified dealer included — agree on the public key and on every public-key
+    // share. Only round-one disqualifications remove a party from the sharing.
+    let all_results = results
         .iter()
-        .enumerate()
-        .filter(|(position, _)| !expected_disqualified.contains(&party_id(*position)))
-        .filter_map(|(_, result)| result.as_ref().ok())
+        .filter_map(|result| result.as_ref().ok())
         .collect::<Vec<_>>();
-    let expected = &honest_results[0].finished;
-    for result in honest_results {
+    assert_eq!(
+        all_results.len(),
+        completing_parties,
+        "every party that reached the blame round finalizes"
+    );
+    let expected = &all_results[0].finished;
+    for result in all_results {
         assert_eq!(result.disqualified_parties, expected_disqualified);
         assert!(result.excluded_verdict_parties.is_empty());
+        assert_eq!(
+            result.finished.pk_shares.len(),
+            usize::from(num_parties),
+            "a blame-round disqualification drops the polynomial, not the shareholder"
+        );
         assert!(
             expected_disqualified
                 .iter()
-                .all(|party| !result.finished.pk_shares.contains_key(party)),
-            "disqualified parties must not have public-key shares"
-        );
-        assert_eq!(
-            result.finished.pk_shares.len(),
-            usize::from(num_parties) - expected_disqualified.len()
+                .all(|party| result.finished.pk_shares.contains_key(party)),
+            "a disqualified dealer keeps a public-key share"
         );
         assert_eq!(result.finished.pk, expected.pk);
         assert_eq!(result.finished.pk_shares, expected.pk_shares);
@@ -577,6 +585,22 @@ fn run_optional_blame_round(mode: BlameTestMode, num_parties: u16, threshold: u1
             result.finished.pk_shares[&result.finished.my_idx]
         );
     }
+
+    // Any `threshold` of the resulting shares still reconstruct the same key, so the sharing is
+    // usable across the full shareholder set rather than only the qualified dealers.
+    let sk_shares = results
+        .iter()
+        .filter_map(|result| result.as_ref().ok())
+        .map(|result| result.finished.sk_share)
+        .collect::<Vec<_>>();
+    let degree = usize::from(threshold) - 1;
+    assert_eq!(
+        (Affine::generator()
+            * test_utils::reconstruct_random_shares(&sk_shares, degree, &mut rng))
+        .into_affine(),
+        expected.pk,
+        "any threshold of the surviving shares reconstructs the key"
+    );
 }
 
 #[test]

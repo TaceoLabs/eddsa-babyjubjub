@@ -3,7 +3,7 @@
 
 use crate::{
     Affine, BaseField, Curve, ScalarField,
-    keygen::{Parameters, finished::Finished, test::run_keygen},
+    keygen::{Parameters, blame::BlameVerdict, finished::Finished, test::run_keygen},
     reshare::{
         receiver::ReShareProtocolReceiver, sender::ReShareProtocolSender,
         sender_set::ReShareSenderSet,
@@ -273,6 +273,7 @@ fn sign<R: Rng + CryptoRng>(
         .map(|(position, party)| {
             DLogShareShamir::new(
                 party.sk_share,
+                &public_key,
                 party_id(position),
                 params.number_of_parties,
                 params.threshold,
@@ -442,7 +443,7 @@ fn run_reshare_blame_test(
         .correct()
         .expect("all old shares reconstruct the key");
 
-    let sender_states = (1..=old_params.number_of_parties)
+    let mut sender_states = (1..=old_params.number_of_parties)
         .map(|sender| {
             ReShareProtocolSender::<Curve>::new(
                 sender,
@@ -550,18 +551,32 @@ fn run_reshare_blame_test(
         }
     }
 
-    let accusers = receivers[0].accusations().expect("all verdicts received");
+    // The accused old sender collects the same verdict broadcasts the receivers saw and derives its
+    // own accuser set from them. It is never handed one.
+    for (position, verdict) in verdicts.iter().enumerate() {
+        if mode == ReShareBlameTestMode::MissingVerdict
+            && position + 1 == usize::from(new_params.number_of_parties)
+        {
+            continue;
+        }
+        sender_states[0]
+            .add_verdict(party_id(position), verdict.clone())
+            .expect("valid new-party verdict");
+    }
+    if mode == ReShareBlameTestMode::MissingVerdict {
+        sender_states[0]
+            .exclude_missing_verdict(new_params.number_of_parties)
+            .expect("common timeout excludes the missing receiver verdict");
+    }
     let mut revelation = if matches!(
         mode,
         ReShareBlameTestMode::Missing | ReShareBlameTestMode::MissingBroadcast
     ) {
         None
     } else {
-        Some(
-            sender_states[0]
-                .get_blame_revelation(&accusers[&1])
-                .expect("accused sender reveals committed shares"),
-        )
+        sender_states[0]
+            .get_blame_revelation()
+            .expect("accused sender reveals committed shares")
     };
     if mode == ReShareBlameTestMode::Malformed {
         revelation
@@ -667,5 +682,162 @@ fn reshare_blame_continues_after_a_missing_receiver_verdict() {
         ReShareBlameTestMode::MissingVerdict,
         Parameters::new(4, 2),
         Parameters::new(3, 2),
+    );
+}
+
+/// Fixture for the reshare revelation tests: a 4-party old committee that has agreed to hand its key
+/// over to `new_params`, from which fresh states for accused old sender 1 can be built.
+struct BlameSenderFixture {
+    old_parties: Vec<Finished<Curve>>,
+    sender_set: ReShareSenderSet<Curve>,
+    session_id: Uuid,
+    new_params: Parameters,
+}
+
+impl BlameSenderFixture {
+    fn new<R: Rng + CryptoRng>(rng: &mut R) -> Self {
+        let old_params = Parameters::new(4, 2);
+        let new_params = Parameters::new(3, 2);
+        let old_parties = run_keygen(
+            old_params.number_of_parties,
+            old_params.threshold,
+            Uuid::new_v4(),
+            rng,
+        );
+        let mut sender_set = ReShareSenderSet::<Curve>::for_pk_and_parameters(
+            old_parties[0].pk,
+            old_params,
+            new_params,
+        );
+        for sender in 1..=old_params.number_of_parties {
+            sender_set
+                .add_party(
+                    sender,
+                    old_parties[party_position(sender)].pk_shares[&sender],
+                )
+                .expect("honest old public-key share");
+        }
+        Self {
+            old_parties,
+            sender_set,
+            session_id: Uuid::new_v4(),
+            new_params,
+        }
+    }
+
+    /// A fresh state for old sender 1, the sender the tests accuse.
+    fn accused_sender<R: Rng + CryptoRng>(&self, rng: &mut R) -> ReShareProtocolSender<Curve> {
+        ReShareProtocolSender::<Curve>::new(
+            1,
+            &self.old_parties[0].sk_share,
+            self.sender_set.clone(),
+            self.session_id,
+            rng,
+        )
+        .expect("valid old sender")
+    }
+
+    fn verdict(&self, blamed: &[u16]) -> BlameVerdict {
+        BlameVerdict {
+            session_id: self.session_id,
+            blamed_parties: blamed.iter().copied().collect(),
+        }
+    }
+}
+
+/// The accuser set is derived from collected verdicts, so nothing is revealed until every new party's
+/// verdict has arrived or been excluded.
+#[test]
+fn reshare_sender_reveals_nothing_before_verdicts_complete() {
+    let mut rng = rand::thread_rng();
+    let fixture = BlameSenderFixture::new(&mut rng);
+    let mut sender = fixture.accused_sender(&mut rng);
+
+    assert!(
+        sender.get_blame_revelation().is_err(),
+        "must not reveal before every verdict is in"
+    );
+    sender
+        .add_verdict(1, fixture.verdict(&[1]))
+        .expect("accusing verdict");
+    assert!(
+        sender.get_blame_revelation().is_err(),
+        "two new-party verdicts are still missing"
+    );
+}
+
+/// Only a new party that actually broadcast a blaming verdict is answered. A caller cannot name an
+/// accuser, so a party that did not complain never receives an evaluation.
+#[test]
+fn reshare_sender_answers_only_real_accusers() {
+    let mut rng = rand::thread_rng();
+    let fixture = BlameSenderFixture::new(&mut rng);
+
+    // Every new party complains about a different old sender, so sender 1 has nothing to answer.
+    let mut unaccused = fixture.accused_sender(&mut rng);
+    for new_party in 1..=fixture.new_params.number_of_parties {
+        unaccused
+            .add_verdict(new_party, fixture.verdict(&[2]))
+            .expect("valid new-party verdict");
+    }
+    assert!(
+        unaccused
+            .get_blame_revelation()
+            .expect("verdicts are complete")
+            .is_none(),
+        "a sender nobody accused reveals nothing"
+    );
+
+    // Only new party 2 accuses sender 1, so only new party 2 is answered.
+    let mut sender = fixture.accused_sender(&mut rng);
+    sender
+        .add_verdict(1, fixture.verdict(&[]))
+        .expect("ok verdict");
+    sender
+        .add_verdict(2, fixture.verdict(&[1]))
+        .expect("accusing verdict");
+    sender
+        .add_verdict(3, fixture.verdict(&[]))
+        .expect("ok verdict");
+    let revelation = sender
+        .get_blame_revelation()
+        .expect("verdicts are complete")
+        .expect("the sender was accused");
+    assert_eq!(
+        revelation
+            .shares
+            .iter()
+            .map(|share| share.receiver)
+            .collect::<Vec<_>>(),
+        vec![2],
+        "only the accuser is answered"
+    );
+}
+
+/// The constant term of the resharing polynomial is the sender's secret key share, so answering
+/// `new_threshold` accusers would publish enough evaluations to interpolate it. The sender refuses
+/// and accepts disqualification instead.
+#[test]
+fn reshare_sender_refuses_to_disclose_its_key_share() {
+    let mut rng = rand::thread_rng();
+    let fixture = BlameSenderFixture::new(&mut rng);
+    let mut sender = fixture.accused_sender(&mut rng);
+
+    sender
+        .add_verdict(1, fixture.verdict(&[1]))
+        .expect("accusing verdict");
+    sender
+        .add_verdict(2, fixture.verdict(&[1]))
+        .expect("accusing verdict");
+    sender
+        .add_verdict(3, fixture.verdict(&[]))
+        .expect("ok verdict");
+
+    let error = sender
+        .get_blame_revelation()
+        .expect_err("must refuse to disclose the secret key share");
+    assert!(
+        error.to_string().contains("secret key share"),
+        "unexpected error: {error}"
     );
 }

@@ -6,7 +6,7 @@
 //! that contributed a malformed share.
 
 use crate::{
-    Affine, BaseField, MaliciousPartiesError, Projective, ScalarField,
+    Affine, BaseField, IdentifiableAbortError, MaliciousPartiesError, Projective, ScalarField,
     additive::{partial_commit::PartialEdDSACommitmentsAdditive, signature::EdDSASigShareAdditive},
     commit::EdDSACommitments,
     nonce::CombineTwoNonceRandomnessArgs,
@@ -82,9 +82,12 @@ impl EdDSACommitmentsAdditive {
     /// Signature shares and nonce commitments carry party IDs. Public-key shares are keyed by ID.
     ///
     /// # Errors
-    /// Returns a [`MaliciousPartiesError`] with the IDs of all parties whose signature share does
-    /// not verify against their commitment and their share of the public key.
-    ///
+    /// Returns [`IdentifiableAbortError::MaliciousParties`] with the IDs of all parties whose
+    /// signature share does not verify against their commitment and their share of the public key.
+    /// Returns [`IdentifiableAbortError::InvalidInput`] when the supplied shares, commitments, or
+    /// public-key shares do not match the contributing party set, do not sum to the stored
+    /// aggregate, or do not reconstruct the public key — in that case no share was validated and no
+    /// participant may be accused.
     pub fn sign_agg_with_identifiable_abort(
         self,
         session_id: Uuid,
@@ -93,7 +96,7 @@ impl EdDSACommitmentsAdditive {
         public_key: &EdDSAPublicKey,
         x_share_commitments: &BTreeMap<u16, Affine>,
         commitments: &[PartialEdDSACommitmentsAdditive],
-    ) -> eyre::Result<EdDSASignature> {
+    ) -> Result<EdDSASignature, IdentifiableAbortError> {
         EdDSACommitments::validate_party_ids(&self.0.contributing_parties)?;
         let shares = self.ordered_shares(shares)?;
         let commitment_by_party = commitments
@@ -104,23 +107,23 @@ impl EdDSACommitmentsAdditive {
             || commitment_by_party.keys().copied().collect::<Vec<_>>()
                 != self.0.contributing_parties
         {
-            eyre::bail!("nonce commitments do not match the contributing party set");
+            return Err(eyre::eyre!("nonce commitments do not match the contributing party set").into());
         }
         if x_share_commitments.keys().copied().collect::<Vec<_>>() != self.0.contributing_parties {
-            eyre::bail!("public-key shares do not match the contributing party set");
+            return Err(eyre::eyre!("public-key shares do not match the contributing party set").into());
         }
         let (individual_d, individual_e) = commitment_by_party.values().fold(
             (Projective::zero(), Projective::zero()),
             |(d, e), commitment| (d + commitment.0.d, e + commitment.0.e),
         );
         if individual_d.into_affine() != self.0.d || individual_e.into_affine() != self.0.e {
-            eyre::bail!("individual and aggregate nonce commitments differ");
+            return Err(eyre::eyre!("individual and aggregate nonce commitments differ").into());
         }
         let reconstructed_pk = x_share_commitments
             .values()
             .fold(Projective::zero(), |acc, point| acc + point);
         if reconstructed_pk.into_affine() != public_key.pk {
-            eyre::bail!("public-key shares do not reconstruct the public key");
+            return Err(eyre::eyre!("public-key shares do not reconstruct the public key").into());
         }
 
         let (r, b) = crate::nonce::combine_two_nonce_randomness(CombineTwoNonceRandomnessArgs {
@@ -160,7 +163,7 @@ impl EdDSACommitmentsAdditive {
         }
 
         if !cheating_parties.is_empty() {
-            eyre::bail!(MaliciousPartiesError(cheating_parties));
+            return Err(MaliciousPartiesError(cheating_parties).into());
         }
 
         // Finally assemble the signature

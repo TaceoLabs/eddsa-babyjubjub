@@ -17,25 +17,28 @@ fn test_distributed_eddsa(num_parties: usize, cheating_parties: &[usize]) {
     let mut rng = rand::thread_rng();
 
     let message = BaseField::rand(&mut rng);
-    // Random x shares
-    let x_shares = (1..=num_parties)
-        .map(|party_id| {
+    // Random additive scalars, summing to the signing key
+    let scalars = (0..num_parties)
+        .map(|_| ScalarField::rand(&mut rng))
+        .collect::<Vec<_>>();
+    let x = scalars.iter().fold(ScalarField::zero(), |acc, s| acc + s);
+
+    // Create public keys, then bind each scalar to its identity and that key
+    let public_key = (Affine::generator() * x).into_affine();
+    let public_key_typed = EdDSAPublicKey { pk: public_key };
+    let x_shares = scalars
+        .iter()
+        .enumerate()
+        .map(|(position, &value)| {
             DLogShareAdditive::new(
-                ScalarField::rand(&mut rng),
-                u16::try_from(party_id).expect("party ID fits"),
+                value,
+                &public_key_typed,
+                u16::try_from(position + 1).expect("party ID fits"),
                 u16::try_from(num_parties).expect("party count fits"),
             )
             .expect("valid additive share metadata")
         })
         .collect::<Vec<_>>();
-
-    // Combine x shares
-    let x = x_shares
-        .iter()
-        .fold(ScalarField::zero(), |acc, x| acc + x.value);
-
-    // Create public keys
-    let public_key = (Affine::generator() * x).into_affine();
     let x_share_commitments = x_shares
         .iter()
         .map(|x| (x.party_id, (Affine::generator() * x.value).into_affine()))
@@ -69,7 +72,7 @@ fn test_distributed_eddsa(num_parties: usize, cheating_parties: &[usize]) {
     let mut signatures = Vec::with_capacity(num_parties);
     for (session, x_) in sessions.into_iter().zip(x_shares.iter()) {
         let signature = session
-            .sign_round(session_id, x_, message, &public_key, challenge.clone())
+            .sign_round(session_id, x_, message, challenge.clone())
             .expect("valid additive signing package");
         signatures.push(signature);
     }
@@ -105,9 +108,8 @@ fn test_distributed_eddsa(num_parties: usize, cheating_parties: &[usize]) {
         match result {
             Err(error) => assert_eq!(
                 error
-                    .downcast::<crate::MaliciousPartiesError>()
-                    .expect("malicious-party error")
-                    .into_inner(),
+                    .into_malicious_parties()
+                    .expect("the abort must attribute blame, not report bad input"),
                 cheating_parties,
             ),
             Ok(_) => panic!("cheating parties must be identified"),

@@ -46,8 +46,15 @@ pub(crate) fn combine_two_nonce_randomness(
     let mut hasher = blake3::Hasher::new();
     hasher.update(crate::FROST_3_NONCE_COMBINER_LABEL);
     hasher.update(session_id.as_bytes());
+    // The signer set is the only variable-length field in the preimage, so it is length-prefixed:
+    // without the prefix, injectivity would rely on every following field staying fixed-width.
+    hasher.update(
+        &u64::try_from(parties.len())
+            .expect("signer set length fits into u64")
+            .to_be_bytes(),
+    );
     for party in parties {
-        hasher.update(&party.to_le_bytes());
+        hasher.update(&party.to_be_bytes());
     }
     let mut buf = Vec::with_capacity(d.compressed_size());
 

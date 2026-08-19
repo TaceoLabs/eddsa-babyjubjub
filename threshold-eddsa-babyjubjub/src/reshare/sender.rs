@@ -7,7 +7,7 @@
 use crate::{
     keygen::{
         SecretScalars,
-        blame::{BlameRevelation, RevealedShare},
+        blame::{BlameRevelation, BlameVerdict, RevealedShare},
         schnorr::{self, SchnorrZkProof},
     },
     reshare::{BroadcastMessage, PartyMessage, sender_set::ReShareSenderSet},
@@ -18,7 +18,7 @@ use ark_ff::UniformRand;
 use ark_serialize::CompressedChecked;
 use eyre::Result;
 use rand::{CryptoRng, Rng};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 /// The senders in the `ReShare` protocol are the "old" parties, i.e., the set of parties currently holding the shares.
@@ -26,10 +26,13 @@ use uuid::Uuid;
 /// The `ReShare` protocol lets the "old" parties re-share their secret key to a new set of parties (which may be overlapping the current set of parties.)
 pub struct ReShareProtocolSender<C: CurveGroup> {
     session_id: Uuid,
+    my_idx: u16,
     coefficients: SecretScalars<C::ScalarField>,
     commitments: Vec<C::Affine>,
     nizk: SchnorrZkProof<C>,
     reshare_set: ReShareSenderSet<C>,
+    verdicts: BTreeMap<u16, BlameVerdict>,
+    excluded_verdict_parties: BTreeSet<u16>,
 }
 
 impl<C: CurveGroup> ReShareProtocolSender<C> {
@@ -91,10 +94,13 @@ impl<C: CurveGroup> ReShareProtocolSender<C> {
 
         Ok(ReShareProtocolSender {
             session_id,
+            my_idx: party_index,
             coefficients,
             commitments,
             nizk,
             reshare_set,
+            verdicts: BTreeMap::new(),
+            excluded_verdict_parties: BTreeSet::new(),
         })
     }
 
@@ -131,27 +137,137 @@ impl<C: CurveGroup> ReShareProtocolSender<C> {
         })
     }
 
-    /// Reveal the committed polynomial evaluation for every new party that accused this sender.
+    /// Add a new party's blame verdict broadcast.
+    ///
+    /// The sender derives the set of accusers it must answer from these verdicts, so they require
+    /// the same reliable broadcast and sender authentication as on the receiver side. Bind the
+    /// externally authenticated identity to `from`.
     ///
     /// # Errors
-    /// Returns an error if the accuser set is empty or contains an invalid new-party identifier.
-    pub fn get_blame_revelation(&self, accusers: &BTreeSet<u16>) -> Result<BlameRevelation<C>> {
-        if accusers.is_empty() {
-            eyre::bail!("cannot create a blame revelation without an accuser");
+    /// Returns an error for an invalid, duplicate, or already-excluded new party, a session
+    /// mismatch, or a verdict blaming an old party outside the selected sender set.
+    pub fn add_verdict(&mut self, from: u16, verdict: BlameVerdict) -> Result<()> {
+        if from == 0 {
+            eyre::bail!("party index must be non-zero",);
         }
-        let mut shares = Vec::with_capacity(accusers.len());
-        for receiver in accusers {
-            if *receiver == 0 || *receiver > self.reshare_set.new_parameters.number_of_parties {
-                eyre::bail!("new party index {receiver} is invalid");
-            }
-            shares.push(RevealedShare {
+        if from > self.reshare_set.new_parameters.number_of_parties {
+            eyre::bail!("new party index {from} invalid for the new parameters");
+        }
+        if self.excluded_verdict_parties.contains(&from) {
+            eyre::bail!("new party {from}'s verdict was already excluded");
+        }
+        if self.verdicts.contains_key(&from) {
+            eyre::bail!("already added verdict from new party {from}");
+        }
+        if verdict.session_id != self.session_id {
+            eyre::bail!("session id mismatch in verdict from new party {from}");
+        }
+        if verdict
+            .blamed_parties
+            .iter()
+            .any(|sender| !self.reshare_set.senders.contains_key(sender))
+        {
+            eyre::bail!("verdict from new party {from} blames an unselected old sender");
+        }
+        self.verdicts.insert(from, verdict);
+        Ok(())
+    }
+
+    /// New parties whose verdict broadcast is still missing.
+    #[must_use]
+    pub fn missing_verdicts(&self) -> Vec<u16> {
+        (1..=self.reshare_set.new_parameters.number_of_parties)
+            .filter(|party| !self.verdicts.contains_key(party))
+            .filter(|party| !self.excluded_verdict_parties.contains(party))
+            .collect()
+    }
+
+    /// Whether every new party's verdict has been received or externally excluded.
+    #[must_use]
+    pub fn verdicts_complete(&self) -> bool {
+        self.missing_verdicts().is_empty()
+    }
+
+    /// Ignore a new party that missed the externally agreed verdict deadline.
+    ///
+    /// Every honest participant must apply the identical exclusion set, matching
+    /// [`ReShareBlameRound::disqualify_missing_verdict`](crate::reshare::blame::ReShareBlameRound::disqualify_missing_verdict).
+    /// A sender that applies a different set derives a different accuser set and is disqualified by
+    /// the receivers for an inconsistent revelation.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid new party, one whose verdict was already accepted or
+    /// excluded, or if the exclusion would leave fewer than the new threshold of receivers.
+    pub fn exclude_missing_verdict(&mut self, party: u16) -> Result<()> {
+        if party == 0 || party > self.reshare_set.new_parameters.number_of_parties {
+            eyre::bail!("new party index {party} invalid for the new parameters");
+        }
+        if self.verdicts.contains_key(&party) {
+            eyre::bail!("new party {party}'s verdict was already accepted");
+        }
+        if self.excluded_verdict_parties.contains(&party) {
+            eyre::bail!("new party {party}'s verdict was already excluded");
+        }
+        let remaining = usize::from(self.reshare_set.new_parameters.number_of_parties)
+            - self.excluded_verdict_parties.len()
+            - 1;
+        if remaining < usize::from(self.reshare_set.new_parameters.threshold) {
+            eyre::bail!("verdict exclusion would leave fewer than the threshold receivers");
+        }
+        self.excluded_verdict_parties.insert(party);
+        Ok(())
+    }
+
+    /// Reveal the committed polynomial evaluation for every new party that accused this sender.
+    ///
+    /// The accuser set is derived from the verdicts collected with
+    /// [`ReShareProtocolSender::add_verdict`] and is never supplied by the caller: an accuser that
+    /// did not broadcast a blaming verdict is never answered. Returns `None` when no new party
+    /// accused this sender.
+    ///
+    /// The constant term of the resharing polynomial is this sender's secret key share, so
+    /// revealing `new_parameters.threshold` evaluations would let any observer interpolate it. At
+    /// that point the sender refuses: either it really is malicious and being disqualified is the
+    /// correct outcome, or the accusers form a threshold-sized coalition that can already
+    /// reconstruct the key from their own new shares. Disqualification is never worse than
+    /// disclosure.
+    ///
+    /// # Errors
+    /// Returns an error until every new party's verdict has been received or externally excluded,
+    /// or if answering the accusers would disclose the secret key share.
+    pub fn get_blame_revelation(&self) -> Result<Option<BlameRevelation<C>>> {
+        if !self.verdicts_complete() {
+            eyre::bail!("cannot reveal before every new party's verdict is received or excluded");
+        }
+        let accusers = self
+            .verdicts
+            .iter()
+            .filter(|(_, verdict)| verdict.blamed_parties.contains(&self.my_idx))
+            .map(|(accuser, _)| *accuser)
+            .collect::<BTreeSet<_>>();
+        if accusers.is_empty() {
+            return Ok(None);
+        }
+        let threshold = usize::from(self.reshare_set.new_parameters.threshold);
+        if accusers.len() >= threshold {
+            eyre::bail!(
+                "refusing to reveal {} evaluations of a degree-{} polynomial: at the new threshold \
+                 of {threshold} this would disclose party {}'s secret key share",
+                accusers.len(),
+                self.reshare_set.new_parameters.degree(),
+                self.my_idx,
+            );
+        }
+        let shares = accusers
+            .iter()
+            .map(|receiver| RevealedShare {
                 receiver: *receiver,
                 share: utils::evaluate_poly(&self.coefficients, C::ScalarField::from(*receiver)),
-            });
-        }
-        Ok(BlameRevelation {
+            })
+            .collect();
+        Ok(Some(BlameRevelation {
             session_id: self.session_id,
             shares,
-        })
+        }))
     }
 }

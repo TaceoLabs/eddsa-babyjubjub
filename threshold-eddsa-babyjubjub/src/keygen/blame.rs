@@ -57,6 +57,11 @@ pub struct BlameResult<C: CurveGroup> {
     /// The ordinary finalized DKG output, computed without disqualified dealer contributions.
     pub finished: Finished<C>,
     /// DKG dealers or old reshare senders excluded for invalid or missing protocol messages.
+    ///
+    /// Their polynomial contribution is dropped from the output. A DKG dealer disqualified in the
+    /// blame round nonetheless remains a shareholder and keeps a `pk_shares` entry, because it can
+    /// compute its share of the surviving aggregate polynomial regardless; exclude it from future
+    /// signing committees at the application layer if that is the intent.
     pub disqualified_parties: Vec<u16>,
     /// Verdict participants omitted after an externally agreed timeout.
     ///
@@ -211,15 +216,36 @@ impl<C: CurveGroup> BlameRound<C> {
 
     /// Create this dealer's revelation broadcast if another party accused it.
     ///
-    /// Calling this also marks the local dealer's valid revelation as resolved.
+    /// The accuser set is derived from the verdicts collected with
+    /// [`BlameRound::add_verdict`] and is never supplied by the caller, so a party that did not
+    /// broadcast a blaming verdict is never answered.
+    ///
+    /// This does *not* mark the local dealer as resolved. Feed the revelation back through
+    /// [`BlameRound::add_revelation`] as the broadcast channel actually delivered it, exactly as
+    /// every other party does. Otherwise a dealer whose broadcast was corrupted or truncated in
+    /// transit would judge itself qualified while everyone else disqualified it, and would silently
+    /// end up holding a share of a different key.
     ///
     /// # Errors
-    /// Returns an error until all verdict broadcasts have been collected.
+    /// Returns an error until all verdict broadcasts have been collected, or if answering the
+    /// accusers would reveal enough evaluations to interpolate this dealer's polynomial. The latter
+    /// cannot happen while at most `threshold - 1` parties are corrupted, because an honest dealer
+    /// is never accused by an honest party.
     pub fn revelation(&mut self) -> Result<Option<BlameRevelation<C>>> {
         let accusations = self.accusations()?;
         let Some(accusers) = accusations.get(&self.my_idx) else {
             return Ok(None);
         };
+        let threshold = usize::from(self.params.threshold);
+        if accusers.len() >= threshold {
+            eyre::bail!(
+                "refusing to reveal {} evaluations of a degree-{} polynomial: at a threshold of \
+                 {threshold} this would disclose party {}'s polynomial",
+                accusers.len(),
+                self.params.degree(),
+                self.my_idx,
+            );
+        }
         let shares = accusers
             .iter()
             .map(|receiver| RevealedShare {
@@ -227,7 +253,6 @@ impl<C: CurveGroup> BlameRound<C> {
                 share: self.secret_shares[usize::from(*receiver) - 1],
             })
             .collect();
-        self.resolved_dealers.insert(self.my_idx);
         Ok(Some(BlameRevelation {
             session_id: self.session_id,
             shares,
@@ -239,11 +264,23 @@ impl<C: CurveGroup> BlameRound<C> {
     /// A dealer is disqualified if the broadcast is malformed or any revealed share fails its
     /// polynomial equation. A valid revelation replaces the private value held by its receiver.
     ///
+    /// `from` may be the local party: an accused dealer must judge its own broadcast as the channel
+    /// delivered it, so that it reaches the same verdict about itself as everyone else and cannot
+    /// finalize onto a key the other parties are not using.
+    ///
     /// # Errors
     /// Returns an error for an invalid sender, duplicate resolution, or an unaccused sender.
     /// Invalid revelations are recorded as dealer disqualifications.
     pub fn add_revelation(&mut self, from: u16, revelation: &BlameRevelation<C>) -> Result<()> {
-        self.validate_other_party(from)?;
+        if from == 0 {
+            eyre::bail!("party index must be non-zero");
+        }
+        if from > self.params.number_of_parties {
+            eyre::bail!("party index {from} invalid for parameters");
+        }
+        if !self.commitments.contains_key(&from) {
+            eyre::bail!("party {from} was disqualified before the blame round");
+        }
         let accusations = self.accusations()?;
         let Some(expected_receivers) = accusations.get(&from) else {
             eyre::bail!("party {from} was not accused");
@@ -322,9 +359,20 @@ impl<C: CurveGroup> BlameRound<C> {
 
     /// Finalize the DKG from all non-disqualified dealer contributions.
     ///
+    /// A dealer disqualified during this blame round has its *polynomial* dropped from the aggregate,
+    /// as `PedPoP` prescribes, but remains a *shareholder*: it completed round two, so it received
+    /// every qualified dealer's evaluation and can compute its own share of the aggregate polynomial
+    /// whether or not the honest parties record one for it. Withholding its public-key share would
+    /// therefore buy no security while desynchronizing the views and shrinking the shareholder set.
+    /// Its ID is still reported in [`BlameResult::disqualified_parties`], so an integrator that does
+    /// not want a proven cheater in future signing committees can exclude it at that layer.
+    ///
+    /// Parties disqualified back in round one are a different case and are *not* shareholders: they
+    /// never reached round two, so they hold nothing to build a share from.
+    ///
     /// # Errors
-    /// Returns an error until every verdict and required revelation has been processed, or if all
-    /// dealers were disqualified.
+    /// Returns an error until every verdict and required revelation has been processed, or if fewer
+    /// than the threshold number of dealer contributions survive.
     pub fn finalize(self) -> Result<BlameResult<C>> {
         if !self.verdicts_complete() {
             eyre::bail!("cannot finalize before all verdicts are received");
@@ -332,10 +380,9 @@ impl<C: CurveGroup> BlameRound<C> {
         if !self.missing_revelations()?.is_empty() {
             eyre::bail!("cannot finalize before all accusations are resolved");
         }
-        if self.disqualified_dealers.contains(&self.my_idx) {
-            eyre::bail!("local party was disqualified and cannot obtain a secret-key share");
-        }
 
+        // Everyone that completed round two, blame-disqualified dealers included.
+        let shareholders = self.commitments.keys().copied().collect::<Vec<_>>();
         let qualified_dealers = self
             .commitments
             .keys()
@@ -357,12 +404,7 @@ impl<C: CurveGroup> BlameRound<C> {
                     }
                 });
         let mut public_key_shares = HashMap::new();
-        for party in self
-            .commitments
-            .keys()
-            .filter(|party| !self.disqualified_dealers.contains(party))
-            .copied()
-        {
+        for party in shareholders {
             let share = qualified_dealers
                 .iter()
                 .fold(C::zero(), |acc, dealer| {

@@ -15,7 +15,6 @@ use crate::{
     session::EdDSASession,
     signature::EdDSASigShare,
 };
-use eddsa_babyjubjub::EdDSAPublicKey;
 use rand::{CryptoRng, Rng};
 use uuid::Uuid;
 use zeroize::ZeroizeOnDrop;
@@ -44,6 +43,9 @@ impl EdDSASessionAdditive {
     /// Finalizes a signature share for a given challenge hash and session.
     /// The session and information therein is consumed to prevent reuse of the randomness.
     ///
+    /// The public key is derived from the identity-bound key share rather than taken as an argument,
+    /// so the signer never signs against a key it cannot check.
+    ///
     /// # Errors
     /// Returns an error if the key-share metadata is invalid, the commitments do not contain the
     /// complete canonical committee, or the nonce session and key share belong to different parties.
@@ -52,9 +54,9 @@ impl EdDSASessionAdditive {
         session_id: Uuid,
         x_share: &DLogShareAdditive,
         message: BaseField,
-        public_key: &EdDSAPublicKey,
         EdDSACommitmentsAdditive(challenge_input): EdDSACommitmentsAdditive,
     ) -> eyre::Result<EdDSASigShareAdditive> {
+        let public_key = x_share.public_key();
         let parties = &challenge_input.contributing_parties;
         crate::commit::EdDSACommitments::validate_party_ids(parties)?;
         if x_share.party_id == 0
