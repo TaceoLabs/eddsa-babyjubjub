@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.6.1](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-eddsa-babyjubjub-v0.6.0...taceo-eddsa-babyjubjub-v0.6.1)
+
+### 🧪 Testing
+
+
+- Add KATs for eddsa-babyjubjub ([#46](https://github.com/TaceoLabs/eddsa-babyjubjub/pull/46)) - ([fd20b93](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/fd20b938fa4b9f9474a5a3a2d8bfde6fb0f360e6))
+
+
 ## [0.6.0](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-eddsa-babyjubjub-v0.5.5...taceo-eddsa-babyjubjub-v0.6.0)
 
 ### 🚜 Refactor
