@@ -1,9 +1,10 @@
 [workspace]
 resolver = "3"
 members = [
-  "ark-babyjubjub",
-  "eddsa-babyjubjub",
-  "poseidon2",
+    "ark-babyjubjub",
+    "eddsa-babyjubjub",
+    "poseidon2",
+    "threshold-eddsa-babyjubjub",
 ]
 
 [workspace.package]
@@ -22,17 +23,20 @@ ark-groth16 = { version = "0.6", default-features = false }
 ark-r1cs-std = { version = "0.6", default-features = false }
 ark-relations = { version = "0.6", default-features = false }
 ark-serde-compat = { package = "taceo-ark-serde-compat", version = "0.6", default-features = false, features = [
-  "babyjubjub"
+    "babyjubjub",
 ] }
 ark-serialize = { version = "0.6", default-features = false }
 ark-std = "0.6"
 blake3 = "1"
+eddsa-babyjubjub = { package = "taceo-eddsa-babyjubjub", path = "eddsa-babyjubjub" }
 eyre = "0.6"
+itertools = "0.15"
 num-bigint = "0.4"
 num-traits = "0.2"
 rand = "0.8"
 serde = { version = "1" }
 thiserror = "2"
+uuid = "1"
 zeroize = { version = "1", features = ["derive"] }
 
 [workspace.lints.clippy]

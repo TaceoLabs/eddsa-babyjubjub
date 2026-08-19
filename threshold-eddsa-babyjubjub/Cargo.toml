@@ -1,0 +1,38 @@
+[package]
+name = "taceo-threshold-eddsa-babyjubjub"
+version = "0.1.0"
+edition.workspace = true
+# Higher than the workspace MSRV: `taceo-ark-serde-compat` 0.6 requires 1.90.
+rust-version = "1.90"
+description = "A threshold EdDSA signature scheme implementation over the Baby Jubjub elliptic curve using Frost3 and Poseidon2, useful for SNARK-friendliness."
+readme = "./README.md"
+repository.workspace = true
+license.workspace = true
+publish = true
+
+[dependencies]
+ark-babyjubjub = { package = "taceo-ark-babyjubjub", path = "../ark-babyjubjub", version = "0.6.0" }
+blake3 = { workspace = true }
+ark-ec = { workspace = true }
+ark-ff = { workspace = true }
+ark-serde-compat = { workspace = true }
+ark-serialize = { workspace = true, features = ["serde"] }
+eddsa-babyjubjub = { workspace = true }
+eyre = { workspace = true }
+itertools = { workspace = true }
+num-bigint = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+zeroize = { workspace = true }
+
+[lints]
+workspace = true
+
+[features]
+default = []
+additive = []
+
+[dev-dependencies]
+serde_json = "1"
