@@ -10,7 +10,10 @@ pub mod schnorr;
 #[cfg(test)]
 pub mod test;
 
+use serde::{Deserialize, Serialize};
+
 /// The parameters of a DKG protocol run, which must be the same for all participating parties.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Parameters {
     pub(crate) number_of_parties: u16,
     pub(crate) threshold: u16,

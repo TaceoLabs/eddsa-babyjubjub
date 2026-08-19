@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 /// Runs the full DKG protocol for `num_parties` honest parties, where `threshold` parties are
 /// required to reconstruct the key, and returns the final state of every party.
-fn run_keygen<R: Rng + CryptoRng>(
+pub(crate) fn run_keygen<R: Rng + CryptoRng>(
     num_parties: u16,
     threshold: u16,
     session_id: Uuid,

@@ -6,6 +6,7 @@ pub mod commit;
 pub mod keygen;
 pub mod nonce;
 pub mod partial_commit;
+pub mod reshare;
 pub mod session;
 pub mod shamir;
 pub mod signature;

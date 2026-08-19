@@ -37,11 +37,10 @@ pub struct RoundOne<C: CurveGroup> {
 /// Communication sent in the first round of the DKG protocol.
 /// This is intended to be broadcast to all other participants.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound = "")] // we need this to fix serde's assumptions about nizk
 pub struct RoundOneBroadcast<C: CurveGroup> {
-    session_id: Uuid,
-    commitments: CompressedChecked<Vec<C::Affine>>,
-    nizk: SchnorrZkProof<C>,
+    pub(crate) session_id: Uuid,
+    pub(crate) commitments: CompressedChecked<Vec<C::Affine>>,
+    pub(crate) nizk: SchnorrZkProof<C>,
 }
 
 impl<C: CurveGroup> RoundOne<C> {
@@ -120,7 +119,7 @@ impl<C: CurveGroup> RoundOne<C> {
         }
 
         if self.received_party_messages.contains_key(&from) {
-            eyre::bail!("already added message for party {from}",);
+            eyre::bail!("already added message for party {from}");
         }
         if comm.commitments.len() != usize::from(self.params.threshold) {
             eyre::bail!(MaliciousPartyError::new(from as usize));
@@ -181,10 +180,7 @@ impl<C: CurveGroup> RoundOne<C> {
         // evaluate our polynomial to get the secret share of each party
         let secret_shares = (1..=self.params.number_of_parties)
             .map(|party_idx| {
-                utils::evaluate_poly(
-                    &self.coefficients,
-                    C::ScalarField::from(u64::from(party_idx)),
-                )
+                utils::evaluate_poly(&self.coefficients, C::ScalarField::from(party_idx))
             })
             .collect();
 

@@ -2,6 +2,7 @@
 //!
 //! Provides functions to compute Lagrange coefficients, evaluate polynomials, and reconstruct secrets from shares.
 
+use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::PrimeField;
 
 /// Computes the Lagrange coefficients for the provided party indices.
@@ -13,6 +14,7 @@ use ark_ff::PrimeField;
 /// # Returns
 ///
 /// Vector of Lagrange coefficients for each party.
+#[cfg(test)]
 pub fn lagrange_from_coeff<F: PrimeField + From<T>, T: Copy + Eq>(coeffs: &[T]) -> Vec<F> {
     let num = coeffs.len();
     let mut res = Vec::with_capacity(num);
@@ -76,38 +78,72 @@ pub fn evaluate_poly<F: PrimeField>(poly: &[F], x: F) -> F {
     eval
 }
 
-/// Recovers the secret by combining shares with Lagrange coefficients.
-///
-/// # Arguments
-///
-/// * `shares` - The shares from different parties.
-/// * `lagrange` - Corresponding Lagrange coefficients.
-///
-/// # Returns
-///
-/// The reconstructed secret value.
-///
-/// # Panics
-/// If provided shares and lagrange coefficients are not same length
-pub fn reconstruct<F: PrimeField>(shares: &[F], lagrange: &[F]) -> F {
-    assert_eq!(
-        shares.len(),
-        lagrange.len(),
-        "Shares and lagrange coeffs must be same length"
-    );
-    let mut res = F::zero();
-    for (s, l) in shares.iter().zip(lagrange.iter()) {
-        res += *s * l;
+pub fn evaluate_polynomial_in_exponent<C: CurveGroup>(
+    coefficients: &[C::Affine],
+    party_idx: u16,
+) -> C {
+    debug_assert!(party_idx > 0, "party index must be non-zero");
+    // since the party index is non-zero, this is non zero
+    let x = C::ScalarField::from(party_idx);
+
+    assert!(!coefficients.is_empty(), "Poly must not be empty");
+    let mut iter = coefficients.iter().rev();
+    let mut result = iter
+        .next()
+        .expect("Checked that not empty")
+        .to_owned()
+        .into_group();
+
+    // evaluate the poly using Horner's algorithm
+    for coeff in iter {
+        result *= &x;
+        result += coeff;
     }
-    res
+
+    result
+}
+
+pub fn verify_polynomial_evaluation<C: CurveGroup>(
+    commitments: &[C::Affine],
+    party_idx: u16,
+    share: &C::ScalarField,
+) -> bool {
+    let result = evaluate_polynomial_in_exponent::<C>(commitments, party_idx);
+    result == C::generator() * share
 }
 
 #[cfg(test)]
 pub(crate) mod test_utils {
-    use crate::shamir::utils::{lagrange_from_coeff, reconstruct};
+    use crate::shamir::utils::lagrange_from_coeff;
     use ark_ec::CurveGroup;
     use ark_ff::PrimeField;
     use rand::{Rng, seq::IteratorRandom as _};
+
+    /// Recovers the secret by combining shares with Lagrange coefficients.
+    ///
+    /// # Arguments
+    ///
+    /// * `shares` - The shares from different parties.
+    /// * `lagrange` - Corresponding Lagrange coefficients.
+    ///
+    /// # Returns
+    ///
+    /// The reconstructed secret value.
+    ///
+    /// # Panics
+    /// If provided shares and lagrange coefficients are not same length
+    pub fn reconstruct<F: PrimeField>(shares: &[F], lagrange: &[F]) -> F {
+        assert_eq!(
+            shares.len(),
+            lagrange.len(),
+            "Shares and lagrange coeffs must be same length"
+        );
+        let mut res = F::zero();
+        for (s, l) in shares.iter().zip(lagrange.iter()) {
+            res += *s * l;
+        }
+        res
+    }
 
     /// Reconstructs a curve point from its Shamir shares and lagrange coefficients.
     pub(crate) fn reconstruct_point<C: CurveGroup>(

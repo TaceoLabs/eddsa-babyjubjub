@@ -13,6 +13,8 @@ use uuid::Uuid;
     reason = "Only carries the results of the protocol - not planned to add something"
 )]
 pub struct Finished<C: CurveGroup> {
+    /// The index of this party in the set of parties participating in the protocol.
+    pub my_idx: u16,
     /// The session id shared by all parties of this protocol run.
     pub session_id: Uuid,
     /// This party's Shamir share of the jointly generated signing key.

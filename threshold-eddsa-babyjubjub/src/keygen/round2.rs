@@ -3,7 +3,10 @@
 //! In this round every party sends the evaluation of its polynomial to the respective party over a
 //! private channel, which the receiving party verifies against the commitments from the first round.
 
-use crate::keygen::{MaliciousPartyError, Parameters, finished::Finished};
+use crate::{
+    keygen::{MaliciousPartyError, Parameters, finished::Finished},
+    shamir::utils,
+};
 use ark_ec::CurveGroup;
 use eyre::Result;
 use serde::{Deserialize, Serialize};
@@ -28,40 +31,12 @@ pub struct RoundTwo<C: CurveGroup> {
 /// This communication is intended to be sent *privately* to a specific other party.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoundTwoCommunication<C: CurveGroup> {
-    session_id: Uuid,
+    pub(crate) session_id: Uuid,
     #[serde(with = "ark_serde_compat::field")]
-    secret_share: C::ScalarField,
+    pub(crate) secret_share: C::ScalarField,
 }
 
 impl<C: CurveGroup> RoundTwo<C> {
-    fn evaluate_polynomial_in_exponent(coefficients: &[C::Affine], party_idx: u16) -> C {
-        debug_assert!(party_idx > 0, "party index must be non-zero");
-        // since the party index is non-zero, this is non zero
-        let x = C::ScalarField::from(u64::from(party_idx));
-
-        let mut result = C::zero();
-
-        // evaluate the poly using Horner's algorithm
-        for (idx, coeff) in coefficients.iter().rev().enumerate() {
-            // skip first mult
-            if idx != 0 {
-                result *= &x;
-            }
-            result += coeff;
-        }
-
-        result
-    }
-
-    fn verify_polynomial_evaluation(
-        commitments: &[C::Affine],
-        party_idx: u16,
-        share: &C::ScalarField,
-    ) -> bool {
-        let result = Self::evaluate_polynomial_in_exponent(commitments, party_idx);
-        result == C::generator() * share
-    }
-
     /// Retrieve the communication for the second round to be sent *privately* to the party with index `for_party`.
     ///
     /// This has to be called for each other party participating in the protocol to retrieve the message intended for this party.
@@ -70,6 +45,9 @@ impl<C: CurveGroup> RoundTwo<C> {
     /// # Errors
     /// Returns an error if `for_party` is not a valid party index for the used [`Parameters`].
     pub fn get_party_communication(&self, for_party: u16) -> Result<RoundTwoCommunication<C>> {
+        if for_party == 0 {
+            eyre::bail!("party index must be non-zero",);
+        }
         let idx = usize::from(for_party) - 1;
         let secret_share = *self.secret_shares.get(idx).ok_or(eyre::eyre!(
             "party index {for_party} invalid for used parameters"
@@ -109,14 +87,14 @@ impl<C: CurveGroup> RoundTwo<C> {
         }
 
         if self.received_party_messages.contains_key(&from) {
-            eyre::bail!("already added message for party {from}",);
+            eyre::bail!("already added message for party {from}");
         }
 
         if self.session_id != comm.session_id {
             eyre::bail!(MaliciousPartyError::new(from as usize));
         }
 
-        if !Self::verify_polynomial_evaluation(
+        if !utils::verify_polynomial_evaluation::<C>(
             &self.commitments[&from],
             self.my_idx,
             &comm.secret_share,
@@ -169,7 +147,7 @@ impl<C: CurveGroup> RoundTwo<C> {
                 continue;
             }
             let pk_share = self.commitments.values().fold(C::zero(), |acc, x| {
-                acc + Self::evaluate_polynomial_in_exponent(x, party_idx)
+                acc + utils::evaluate_polynomial_in_exponent::<C>(x, party_idx)
             });
             public_key_shares.insert(party_idx, pk_share.into_affine());
         }
@@ -180,6 +158,7 @@ impl<C: CurveGroup> RoundTwo<C> {
             .fold(C::zero(), |acc, x| acc + x[0]);
 
         Ok(Finished {
+            my_idx: self.my_idx,
             session_id: self.session_id,
             sk_share: my_secret_key_share,
             pk_shares: public_key_shares,
