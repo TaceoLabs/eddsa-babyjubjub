@@ -5,7 +5,8 @@
 
 use crate::{
     keygen::{
-        DuplicateCommitmentsError, MaliciousPartyError, Parameters, SecretScalarMap, SecretScalars,
+        DuplicateCommitmentsError, MalformedMessageError, MaliciousPartyError, MessageError,
+        MessageResult, Parameters, SecretScalarMap, SecretScalars,
         round2::RoundTwo,
         schnorr::{self, SchnorrZkProof},
     },
@@ -13,7 +14,6 @@ use crate::{
 };
 use ark_ec::CurveGroup;
 use ark_ff::UniformRand;
-use ark_serialize::CompressedChecked;
 use eyre::Result;
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
@@ -39,9 +39,14 @@ pub struct RoundOne<C: CurveGroup> {
 /// Communication sent in the first round of the DKG protocol.
 /// This is intended to be broadcast to all other participants.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound(serialize = "", deserialize = ""))]
 pub struct RoundOneBroadcast<C: CurveGroup> {
     pub(crate) session_id: Uuid,
-    pub(crate) commitments: CompressedChecked<Vec<C::Affine>>,
+    #[serde(
+        serialize_with = "crate::serde_utils::serialize_canonical_protocol_vec",
+        deserialize_with = "crate::serde_utils::deserialize_canonical_protocol_vec"
+    )]
+    pub(crate) commitments: Vec<C::Affine>,
     pub(crate) nizk: SchnorrZkProof<C>,
 }
 
@@ -51,7 +56,12 @@ impl<C: CurveGroup> RoundOne<C> {
     /// Begin a new instance of the distributed key generation protocol.
     /// The provided [`Parameters`] must be the same for all participating parties.
     /// Each party must have a distinct `party_index`, ranging from 1 to `params.number_of_parties`, inclusively.
-    /// The provided session id must be the same for all participating parties.
+    /// The provided session id must be the same for all participating parties, and must be globally
+    /// unique per run: it is the only run-specific input to the proof-of-possession context, so
+    /// reusing it with the same [`Parameters`] makes round-one broadcasts replayable. An adversary
+    /// with network control can then suppress an honest party's fresh broadcast, inject its stale
+    /// one, and have the honest party's fresh evaluations fail against the stale commitments — which
+    /// gets it blamed. Use a fresh [`Uuid::new_v4`] per run, never an id derived from configuration.
     ///
     /// # Errors
     /// Returns an error if `party_index` is zero or larger than the number of parties allowed by
@@ -108,7 +118,7 @@ impl<C: CurveGroup> RoundOne<C> {
     pub fn get_broadcast_message(&self) -> RoundOneBroadcast<C> {
         RoundOneBroadcast {
             session_id: self.session_id,
-            commitments: CompressedChecked(self.commitments.clone()),
+            commitments: self.commitments.clone(),
             nizk: self.nizk.clone(),
         }
     }
@@ -116,32 +126,52 @@ impl<C: CurveGroup> RoundOne<C> {
     /// Add a [`RoundOneBroadcast`] received from a party, verifying that everything is in order.
     ///
     /// # Errors
-    /// Returns a [`MaliciousPartyError`] identifying the offending party if its broadcast contains
-    /// the wrong number of commitments, a different session id, or an invalid proof of knowledge.
-    /// Returns a [`DuplicateCommitmentsError`] identifying both offending parties if this party
-    /// committed to the same constant term as a party added earlier.
-    /// All other errors indicate an invalid `from` index and are usually the fault of the local
-    /// party.
-    pub fn add_party_communication(&mut self, from: u16, comm: RoundOneBroadcast<C>) -> Result<()> {
+    /// Returns [`MessageError::MaliciousParty`] for an invalid proof of knowledge and
+    /// [`MessageError::DuplicateCommitments`] if this broadcast repeats the constant-term commitment
+    /// of the local party or of one added earlier; both attribute blame.
+    /// [`MessageError::Malformed`] (wrong commitment count or session id) does not — it is usually a
+    /// local configuration mismatch. [`MessageError::LocalFault`] means an invalid `from` index or a
+    /// duplicate delivery.
+    pub fn add_party_communication(
+        &mut self,
+        from: u16,
+        comm: RoundOneBroadcast<C>,
+    ) -> MessageResult<()> {
         if from == 0 {
-            eyre::bail!("party index must be non-zero",);
+            return Err(MessageError::local(
+                "party index must be non-zero".to_owned(),
+            ));
         }
         if from > self.params.number_of_parties {
-            eyre::bail!("party index {from} invalid for parameters",);
+            return Err(MessageError::local(format!(
+                "party index {from} invalid for parameters"
+            )));
         }
         if from == self.my_idx {
-            eyre::bail!("do not add messages from own party {from}",);
+            return Err(MessageError::local(format!(
+                "do not add messages from own party {from}"
+            )));
         }
 
         if self.received_party_messages.contains_key(&from) {
-            eyre::bail!("already added message for party {from}");
+            return Err(MessageError::local(format!(
+                "already added message for party {from}"
+            )));
         }
         if comm.commitments.len() != usize::from(self.params.threshold) {
-            eyre::bail!(MaliciousPartyError::new(from as usize));
+            return Err(MalformedMessageError::new(
+                from as usize,
+                "commitment count does not match the local threshold",
+            )
+            .into());
         }
 
         if self.session_id != comm.session_id {
-            eyre::bail!("session id mismatch for party {from}");
+            return Err(MalformedMessageError::new(
+                from as usize,
+                "session id does not match the local session",
+            )
+            .into());
         }
 
         // verify ZK proof
@@ -150,29 +180,25 @@ impl<C: CurveGroup> RoundOne<C> {
             .nizk
             .verify(&context, from, &comm.commitments[0], &comm.commitments[1..])
         {
-            eyre::bail!(MaliciousPartyError::new(from as usize));
+            return Err(MaliciousPartyError::new(from as usize).into());
         }
 
         // the commitment to the constant term must be unique across parties, so a duplicate means
         // one party copied the other and both are reported as offending
         let share_commitment = &comm.commitments[0];
         if share_commitment == &self.commitments[0] {
-            eyre::bail!(DuplicateCommitmentsError::new(
-                from as usize,
-                self.my_idx as usize,
-            ));
+            return Err(DuplicateCommitmentsError::new(from as usize, self.my_idx as usize).into());
         }
         for id in 1..=self.params.number_of_parties {
             let Some(commitment) = self.received_party_messages.get(&id) else {
                 continue;
             };
             if share_commitment == &commitment[0] {
-                eyre::bail!(DuplicateCommitmentsError::new(from as usize, id as usize));
+                return Err(DuplicateCommitmentsError::new(from as usize, id as usize).into());
             }
         }
 
-        self.received_party_messages
-            .insert(from, comm.commitments.0);
+        self.received_party_messages.insert(from, comm.commitments);
 
         Ok(())
     }

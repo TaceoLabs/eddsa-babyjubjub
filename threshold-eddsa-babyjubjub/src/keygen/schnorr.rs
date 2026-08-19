@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(bound(serialize = "", deserialize = ""))]
 /// A non-interactive Schnorr proof of knowledge of the discrete logarithm of a curve point.
 pub struct SchnorrZkProof<C: CurveGroup> {
     big_r: CompressedChecked<C::Affine>,

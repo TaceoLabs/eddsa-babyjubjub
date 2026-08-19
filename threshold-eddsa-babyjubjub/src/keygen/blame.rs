@@ -19,6 +19,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlameVerdict {
     pub(crate) session_id: Uuid,
+    #[serde(deserialize_with = "crate::serde_utils::deserialize_protocol_btree_set")]
     pub(crate) blamed_parties: BTreeSet<u16>,
 }
 
@@ -48,6 +49,10 @@ pub struct RevealedShare<C: CurveGroup> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlameRevelation<C: CurveGroup> {
     pub(crate) session_id: Uuid,
+    #[serde(
+        serialize_with = "crate::serde_utils::serialize_protocol_vec",
+        deserialize_with = "crate::serde_utils::deserialize_protocol_vec"
+    )]
     pub(crate) shares: Vec<RevealedShare<C>>,
 }
 
@@ -383,12 +388,14 @@ impl<C: CurveGroup> BlameRound<C> {
 
         // Everyone that completed round two, blame-disqualified dealers included.
         let shareholders = self.commitments.keys().copied().collect::<Vec<_>>();
-        let qualified_dealers = self
+        // `commitments` is a `HashMap`; sort so the reported set is comparable across parties.
+        let mut qualified_dealers = self
             .commitments
             .keys()
             .filter(|dealer| !self.disqualified_dealers.contains(dealer))
             .copied()
             .collect::<Vec<_>>();
+        qualified_dealers.sort_unstable();
         if qualified_dealers.len() < usize::from(self.params.threshold) {
             eyre::bail!("cannot finalize with fewer than the threshold qualified parties");
         }
@@ -427,6 +434,7 @@ impl<C: CurveGroup> BlameRound<C> {
                 sk_share: my_secret_key_share,
                 pk_shares: public_key_shares,
                 pk: public_key.into_affine(),
+                contributing_parties: qualified_dealers,
             },
             disqualified_parties: self.disqualified_dealers.into_iter().collect(),
             excluded_verdict_parties: Vec::new(),

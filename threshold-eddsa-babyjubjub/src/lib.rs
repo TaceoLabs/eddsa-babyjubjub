@@ -7,6 +7,7 @@ pub mod keygen;
 pub mod nonce;
 pub mod partial_commit;
 pub mod reshare;
+mod serde_utils;
 pub mod session;
 pub mod shamir;
 pub mod signature;

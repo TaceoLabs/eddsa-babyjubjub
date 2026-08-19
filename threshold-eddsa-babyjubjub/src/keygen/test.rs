@@ -3,7 +3,11 @@
 
 use crate::{
     Affine, BaseField, Curve,
-    keygen::{Parameters, finished::Finished, round1::RoundOne},
+    keygen::{
+        Parameters,
+        finished::Finished,
+        round1::{RoundOne, RoundOneBroadcast},
+    },
     shamir::{secret::DLogShareShamir, test::test_threshold_eddsa_inner, utils::test_utils},
 };
 use ark_ec::{AffineRepr, CurveGroup};
@@ -190,7 +194,7 @@ fn test_keygen_and_sign(num_parties: u16, threshold: u16, cheating_positions: &[
                 num_parties,
                 threshold,
             )
-                .expect("valid DKG signing share metadata")
+            .expect("valid DKG signing share metadata")
         })
         .collect::<Vec<_>>();
 
@@ -248,6 +252,24 @@ fn parameters_reject_invalid_deserialization() {
 }
 
 #[test]
+fn round_one_broadcast_serde_round_trips() {
+    let mut rng = rand::thread_rng();
+    let params = Parameters::new(3, 2);
+    let session_id = Uuid::new_v4();
+    let dealer = RoundOne::<Curve>::new(params, 1, session_id, &mut rng).expect("valid DKG party");
+    let mut receiver =
+        RoundOne::<Curve>::new(params, 2, session_id, &mut rng).expect("valid DKG party");
+    let encoded = serde_json::to_vec(&dealer.get_broadcast_message())
+        .expect("round-one broadcast serializes");
+    let decoded = serde_json::from_slice::<RoundOneBroadcast<Curve>>(&encoded)
+        .expect("round-one broadcast deserializes");
+
+    receiver
+        .add_party_communication(1, decoded)
+        .expect("round-tripped broadcast verifies");
+}
+
+#[test]
 fn dkg_can_disqualify_a_missing_round_one_dealer() {
     let mut rng = rand::thread_rng();
     let params = Parameters::new(3, 2);
@@ -281,6 +303,9 @@ fn dkg_can_disqualify_a_missing_round_one_dealer() {
                 .expect("round one complete after disqualification")
         })
         .collect::<Vec<_>>();
+    let Err(_) = round2[0].get_party_communication(3) else {
+        panic!("a disqualified round-one party must not receive a private share");
+    };
     let to_one = round2[1]
         .get_party_communication(1)
         .expect("share for party one");
@@ -595,9 +620,8 @@ fn run_optional_blame_round(mode: BlameTestMode, num_parties: u16, threshold: u1
         .collect::<Vec<_>>();
     let degree = usize::from(threshold) - 1;
     assert_eq!(
-        (Affine::generator()
-            * test_utils::reconstruct_random_shares(&sk_shares, degree, &mut rng))
-        .into_affine(),
+        (Affine::generator() * test_utils::reconstruct_random_shares(&sk_shares, degree, &mut rng))
+            .into_affine(),
         expected.pk,
         "any threshold of the surviving shares reconstructs the key"
     );
@@ -626,4 +650,42 @@ fn optional_blame_round_recovers_a_missing_private_message() {
 #[test]
 fn optional_blame_round_disqualifies_a_missing_verdict_dealer() {
     run_optional_blame_round(BlameTestMode::MissingVerdict, 3, 2);
+}
+
+/// Blame attribution must survive being logged, and a local configuration mismatch must not be
+/// reported as remote misbehaviour.
+#[test]
+fn round_one_errors_separate_attributable_blame_from_a_local_mismatch() {
+    let mut rng = rand::thread_rng();
+    let session_id = Uuid::new_v4();
+    let params = Parameters::new(3, 2);
+    let mut state =
+        RoundOne::<Curve>::new(params, 1, session_id, &mut rng).expect("valid DKG party");
+
+    // A proof of possession binds the prover's index, so replaying party 2's broadcast as party 3
+    // fails cryptographically and is attributable.
+    let broadcast = RoundOne::<Curve>::new(params, 2, session_id, &mut rng)
+        .expect("valid DKG party")
+        .get_broadcast_message();
+    let error = state
+        .add_party_communication(3, broadcast)
+        .expect_err("a replayed proof must not verify");
+    assert_eq!(error.attributable_parties(), vec![3]);
+    assert!(
+        error.to_string().contains('3'),
+        "the party ID must survive being logged: {error}"
+    );
+
+    // A peer configured with a different threshold looks wrong locally, but is not at fault.
+    let mismatched = RoundOne::<Curve>::new(Parameters::new(3, 3), 2, session_id, &mut rng)
+        .expect("valid DKG party")
+        .get_broadcast_message();
+    let error = state
+        .add_party_communication(2, mismatched)
+        .expect_err("a commitment count mismatch must be rejected");
+    assert!(
+        error.attributable_parties().is_empty(),
+        "a configuration mismatch must not accuse anyone: {error}"
+    );
+    assert!(matches!(error, crate::keygen::MessageError::Malformed(_)));
 }

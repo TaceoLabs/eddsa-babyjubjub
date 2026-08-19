@@ -5,7 +5,10 @@
 //! coefficients of the senders, into its own share of the unchanged signing key.
 
 use crate::{
-    keygen::{MaliciousPartyError, finished::Finished, schnorr},
+    keygen::{
+        MalformedMessageError, MaliciousPartyError, MessageError, MessageResult,
+        finished::Finished, schnorr,
+    },
     reshare::{
         BroadcastMessage, PartyMessage, blame::ReShareBlameRound, sender::ReShareProtocolSender,
         sender_set::ReShareSenderSet,
@@ -65,6 +68,9 @@ impl<C: CurveGroup> ReShareProtocolReceiver<C> {
 
     /// Construct a [`ReShareProtocolReceiver`] for a party in the new set of parties with new index `my_idx`.
     ///
+    /// `session_id` must be the same for every participant *and* globally unique per run; see
+    /// [`ReShareProtocolSender::new`] for why reuse lets an honest sender be framed.
+    ///
     /// # Errors
     /// Returns an error if `my_idx` is zero or larger than the number of parties allowed by the new
     /// [`Parameters`](crate::keygen::Parameters).
@@ -99,77 +105,31 @@ impl<C: CurveGroup> ReShareProtocolReceiver<C> {
     /// consistent with the share of the public key the sender was registered with.
     ///
     /// # Errors
-    /// Returns a [`MaliciousPartyError`] identifying the offending party if its broadcast contains
-    /// the wrong number of commitments, either message carries a different session id, the proof of
-    /// knowledge is invalid, the commitment to the constant term does not match the sender's share
-    /// of the public key, or the secret share does not verify against the commitments.
-    /// All other errors indicate an invalid `from` index and are usually the fault of the local
-    /// party.
+    /// Returns [`MessageError::MaliciousParty`] if the proof of knowledge is invalid, the
+    /// constant-term commitment does not match the sender's registered public-key share, or the
+    /// secret share does not verify against the commitments; all three attribute blame.
+    /// [`MessageError::Malformed`] (wrong commitment count or session id) does not — it is usually a
+    /// local configuration mismatch. [`MessageError::LocalFault`] means an unselected sender or a
+    /// duplicate delivery.
     pub fn add_old_party_communication(
         &mut self,
         from: u16,
         commitments: BroadcastMessage<C>,
         share: &PartyMessage<C>,
-    ) -> Result<()> {
-        if from == 0 {
-            eyre::bail!("party index must be non-zero",);
-        }
-        if from > self.reshare_senders.old_parameters.number_of_parties {
-            eyre::bail!("party index {from} invalid for old parameters",);
-        }
-
-        if !self.reshare_senders.senders.contains_key(&from) {
-            eyre::bail!("party index {from} is not part of the set of ReShare senders");
-        }
-        if self.received_shares.contains_key(&from) {
-            eyre::bail!("already added message for party {from}");
-        }
-
-        if commitments.commitments.len()
-            != usize::from(self.reshare_senders.new_parameters.threshold)
-        {
-            eyre::bail!(MaliciousPartyError::new(from as usize));
-        }
-
-        if self.session_id != commitments.session_id || self.session_id != share.session_id {
-            eyre::bail!("session id mismatch for party {from}");
-        }
-
-        let pk_share = self.reshare_senders.senders[&from];
-
-        // verify ZK proof
-        let context = schnorr::proof_context(
-            Self::CONTEXT_DOMAIN,
-            self.session_id,
-            &[
-                self.reshare_senders.old_parameters,
-                self.reshare_senders.new_parameters,
-            ],
-        );
-        if !commitments.nizk.verify(
-            &context,
-            from,
-            &commitments.commitments[0],
-            &commitments.commitments[1..],
-        ) {
-            eyre::bail!(MaliciousPartyError::new(from as usize));
-        }
-
-        // Commitment must match the public key share of the sender
-        if commitments.commitments[0] != pk_share {
-            eyre::bail!(MaliciousPartyError::new(from as usize));
-        }
+    ) -> MessageResult<()> {
+        self.validate_broadcast(from, &commitments)?;
+        self.validate_share_session(from, share)?;
 
         if !utils::verify_polynomial_evaluation::<C>(
-            &commitments.commitments.0,
+            &commitments.commitments,
             self.my_idx,
             &share.secret_share,
         ) {
-            eyre::bail!(MaliciousPartyError::new(from as usize));
+            return Err(MaliciousPartyError::new(from as usize).into());
         }
 
         self.received_shares
-            .insert(from, (share.secret_share, commitments.commitments.0));
+            .insert(from, (share.secret_share, commitments.commitments));
 
         Ok(())
     }
@@ -181,61 +141,17 @@ impl<C: CurveGroup> ReShareProtocolReceiver<C> {
     /// its committed polynomial equation is converted into a complaint.
     ///
     /// # Errors
-    /// Returns an error for invalid sender metadata, commitments, proof of possession, or session.
+    /// As [`ReShareProtocolReceiver::add_old_party_communication`], except that a private evaluation
+    /// failing its polynomial equation becomes a recorded complaint rather than
+    /// [`MessageError::MaliciousParty`].
     pub fn add_old_party_communication_for_blame(
         &mut self,
         from: u16,
         commitments: BroadcastMessage<C>,
         share: &PartyMessage<C>,
-    ) -> Result<()> {
-        if from == 0 {
-            eyre::bail!("party index must be non-zero",);
-        }
-        if from > self.reshare_senders.old_parameters.number_of_parties {
-            eyre::bail!("party index {from} invalid for old parameters",);
-        }
-
-        if !self.reshare_senders.senders.contains_key(&from) {
-            eyre::bail!("party index {from} is not part of the set of ReShare senders");
-        }
-        if self.received_shares.contains_key(&from) {
-            eyre::bail!("already added message for party {from}");
-        }
-
-        if commitments.commitments.len()
-            != usize::from(self.reshare_senders.new_parameters.threshold)
-        {
-            eyre::bail!(MaliciousPartyError::new(from as usize));
-        }
-
-        if self.session_id != commitments.session_id || self.session_id != share.session_id {
-            eyre::bail!("session id mismatch for party {from}");
-        }
-
-        let pk_share = self.reshare_senders.senders[&from];
-
-        // verify ZK proof
-        let context = schnorr::proof_context(
-            Self::CONTEXT_DOMAIN,
-            self.session_id,
-            &[
-                self.reshare_senders.old_parameters,
-                self.reshare_senders.new_parameters,
-            ],
-        );
-        if !commitments.nizk.verify(
-            &context,
-            from,
-            &commitments.commitments[0],
-            &commitments.commitments[1..],
-        ) {
-            eyre::bail!(MaliciousPartyError::new(from as usize));
-        }
-
-        // Commitment must match the public key share of the sender
-        if commitments.commitments[0] != pk_share {
-            eyre::bail!(MaliciousPartyError::new(from as usize));
-        }
+    ) -> MessageResult<()> {
+        self.validate_broadcast(from, &commitments)?;
+        self.validate_share_session(from, share)?;
 
         if !utils::verify_polynomial_evaluation::<C>(
             &commitments.commitments,
@@ -245,7 +161,7 @@ impl<C: CurveGroup> ReShareProtocolReceiver<C> {
             self.failed_senders.insert(from);
         }
         self.received_shares
-            .insert(from, (share.secret_share, commitments.commitments.0));
+            .insert(from, (share.secret_share, commitments.commitments));
         Ok(())
     }
 
@@ -264,29 +180,64 @@ impl<C: CurveGroup> ReShareProtocolReceiver<C> {
     /// This lets the protocol enter the public blame round, where the sender can reveal the
     /// committed evaluation or be disqualified after an externally agreed deadline.
     ///
+    /// Use this when the sender's broadcast arrived and only its private evaluation is missing.
+    /// Choosing between this and [`ReShareProtocolReceiver::disqualify_missing_sender`] changes the
+    /// surviving sender set, so it must be an externally agreed decision — see that method.
+    ///
     /// # Errors
-    /// Returns an error for an invalid sender, previously received communication, or an invalid
-    /// broadcast, proof, session, or constant commitment.
+    /// As [`ReShareProtocolReceiver::add_old_party_communication`], minus the private-share checks.
     pub fn complain_missing_share(
         &mut self,
         from: u16,
         commitments: BroadcastMessage<C>,
-    ) -> Result<()> {
-        if from == 0
-            || from > self.reshare_senders.old_parameters.number_of_parties
-            || !self.reshare_senders.senders.contains_key(&from)
-        {
-            eyre::bail!("invalid selected old sender");
+    ) -> MessageResult<()> {
+        self.validate_broadcast(from, &commitments)?;
+        self.failed_senders.insert(from);
+        self.received_shares
+            .insert(from, (C::ScalarField::zero(), commitments.commitments));
+        Ok(())
+    }
+
+    /// Validates a sender's broadcast, shared by every intake path. The sender and framing checks
+    /// attribute no blame; the two cryptographic checks bind the broadcast to the public-key share
+    /// the sender was registered with and do.
+    fn validate_broadcast(
+        &self,
+        from: u16,
+        commitments: &BroadcastMessage<C>,
+    ) -> MessageResult<()> {
+        if from == 0 || from > self.reshare_senders.old_parameters.number_of_parties {
+            return Err(MessageError::local(format!(
+                "party index {from} invalid for old parameters"
+            )));
+        }
+        if !self.reshare_senders.senders.contains_key(&from) {
+            return Err(MessageError::local(format!(
+                "party index {from} is not part of the set of ReShare senders"
+            )));
         }
         if self.received_shares.contains_key(&from) {
-            eyre::bail!("already added communication for sender {from}");
+            return Err(MessageError::local(format!(
+                "already added communication for sender {from}"
+            )));
         }
         if commitments.commitments.len()
             != usize::from(self.reshare_senders.new_parameters.threshold)
-            || commitments.session_id != self.session_id
         {
-            eyre::bail!(MaliciousPartyError::new(from as usize));
+            return Err(MalformedMessageError::new(
+                from as usize,
+                "commitment count does not match the local new threshold",
+            )
+            .into());
         }
+        if commitments.session_id != self.session_id {
+            return Err(MalformedMessageError::new(
+                from as usize,
+                "broadcast session id does not match the local session",
+            )
+            .into());
+        }
+
         let context = schnorr::proof_context(
             Self::CONTEXT_DOMAIN,
             self.session_id,
@@ -300,17 +251,35 @@ impl<C: CurveGroup> ReShareProtocolReceiver<C> {
             from,
             &commitments.commitments[0],
             &commitments.commitments[1..],
+            // Commitment must match the public key share of the sender
         ) || commitments.commitments[0] != self.reshare_senders.senders[&from]
         {
-            eyre::bail!(MaliciousPartyError::new(from as usize));
+            return Err(MaliciousPartyError::new(from as usize).into());
         }
-        self.failed_senders.insert(from);
-        self.received_shares
-            .insert(from, (C::ScalarField::zero(), commitments.commitments.0));
+        Ok(())
+    }
+
+    fn validate_share_session(&self, from: u16, share: &PartyMessage<C>) -> MessageResult<()> {
+        if share.session_id != self.session_id {
+            return Err(MalformedMessageError::new(
+                from as usize,
+                "private evaluation session id does not match the local session",
+            )
+            .into());
+        }
         Ok(())
     }
 
     /// Apply an externally agreed disqualification when a sender supplied no usable broadcast.
+    ///
+    /// This drops `from` from the sender set, which changes every remaining Lagrange coefficient and
+    /// therefore the polynomial the new sharing lies on. Since every valid sender set reconstructs
+    /// the same public key, a receiver that disqualifies a different set than its peers still passes
+    /// [`ReShareProtocolReceiver::finalize`] — see
+    /// [`Finished::agreement_digest`](crate::keygen::finished::Finished::agreement_digest). The
+    /// overlap with [`ReShareProtocolReceiver::complain_missing_share`] is the trap: both are
+    /// reachable whenever nothing was recorded for a sender, so derive the choice from an externally
+    /// agreed decision, never from a local timeout.
     ///
     /// # Errors
     /// Returns an error if communication was already received, the sender was not selected, or
@@ -341,6 +310,12 @@ impl<C: CurveGroup> ReShareProtocolReceiver<C> {
     ///
     /// The resulting [`Finished`] state holds this party's share of the unchanged signing key under
     /// the new [`Parameters`](crate::keygen::Parameters).
+    ///
+    /// The public-key check below catches a wrong sender *contribution* but is not an agreement
+    /// check: every valid sender set reconstructs the same key, so receivers that used different sets
+    /// both succeed here. Compare
+    /// [`Finished::agreement_digest`](crate::keygen::finished::Finished::agreement_digest) across
+    /// receivers before erasing the old shares.
     ///
     /// # Errors
     /// Returns an error if the communication of not all old parties has been added yet, i.e., if
@@ -415,6 +390,8 @@ impl<C: CurveGroup> ReShareProtocolReceiver<C> {
             sk_share: my_secret_key_share,
             pk_shares: public_key_shares,
             pk: public_key,
+            // Old-committee indices, ascending because `senders` is a `BTreeMap`.
+            contributing_parties: old_parties,
         })
     }
 

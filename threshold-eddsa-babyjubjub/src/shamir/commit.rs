@@ -109,10 +109,14 @@ impl EdDSACommitmentsShamir {
             || commitment_by_party.keys().copied().collect::<Vec<_>>()
                 != self.0.contributing_parties
         {
-            return Err(eyre::eyre!("nonce commitments do not match the contributing party set").into());
+            return Err(
+                eyre::eyre!("nonce commitments do not match the contributing party set").into(),
+            );
         }
         if x_share_commitments.keys().copied().collect::<Vec<_>>() != self.0.contributing_parties {
-            return Err(eyre::eyre!("public-key shares do not match the contributing party set").into());
+            return Err(
+                eyre::eyre!("public-key shares do not match the contributing party set").into(),
+            );
         }
         let lagrange_coefficients = self
             .0
@@ -194,6 +198,13 @@ impl EdDSACommitmentsShamir {
     }
 
     /// The accumulating party combines a threshold-sized set of identity-bound commitments.
+    ///
+    /// Duplicate party IDs are rejected, but two distinct IDs presenting the same `(d, e)` pair are
+    /// not. This follows Frost3, which drops the duplicate-presignature abort of Frost2-CKM on the
+    /// grounds that authenticated, confidential signer-to-aggregator channels rule out copying.
+    /// Unforgeability is unaffected — a copied commitment cannot yield a share that passes
+    /// `sign_agg_with_identifiable_abort` — but a copy shows up as a failed share rather than as a
+    /// duplicate.
     ///
     /// # Errors
     /// Returns an error for an empty set or duplicate/invalid party IDs.

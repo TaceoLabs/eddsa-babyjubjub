@@ -107,6 +107,12 @@ impl Parameters {
     /// Create the parameters for a protocol run with `number_of_parties` parties, where
     /// `threshold` parties are required to reconstruct the key.
     ///
+    /// `threshold` is the number of shares that reconstruct, so the polynomial has degree
+    /// `threshold - 1`. The `PedPoP` schemes in the [source
+    /// documentation](https://github.com/TaceoLabs/oprf-service/tree/main/docs) use `t` for the
+    /// polynomial *degree* instead, so passing that document's `t` here builds a `(t + 1)`-of-`n`
+    /// key: a valid key that verifies, but a stricter policy than intended.
+    ///
     /// # Panics
     /// Panics unless `1 <= threshold <= number_of_parties`.
     #[must_use]
@@ -131,11 +137,11 @@ impl Parameters {
     }
 }
 
-/// The error returned by a round of the DKG protocol if a party contributed a malformed message.
+/// A party failed a cryptographic check and is provably at fault.
 ///
-/// Carries the ID of the party identified as cheating.
+/// The ID is part of the `Display` output, so attribution survives being logged as a string.
 #[derive(Debug, thiserror::Error)]
-#[error("Malicious parties detected")]
+#[error("party {0} failed a cryptographic check and is provably at fault")]
 pub struct MaliciousPartyError(usize);
 
 impl MaliciousPartyError {
@@ -152,12 +158,12 @@ impl MaliciousPartyError {
     }
 }
 
-/// The error returned by the first round of the DKG protocol if two parties broadcast the same
-/// commitment to the constant term of their polynomial.
+/// Two parties broadcast the same commitment to the constant term of their polynomial.
 ///
-/// Carries the IDs of both parties involved.
+/// Both IDs are in the `Display` output. Resolve by passing both to
+/// [`disqualify_parties`](crate::keygen::round1::RoundOne::disqualify_parties) as one atomic set.
 #[derive(Debug, thiserror::Error)]
-#[error("Duplicate commitments detected")]
+#[error("parties {} and {} committed to the same constant term; both are at fault", .0.0, .0.1)]
 pub struct DuplicateCommitmentsError((usize, usize));
 
 impl DuplicateCommitmentsError {
@@ -173,3 +179,77 @@ impl DuplicateCommitmentsError {
         Self((party_id1, party_id2))
     }
 }
+
+/// A message does not fit the local protocol view, which does **not** prove the sender misbehaved.
+///
+/// The usual cause is a configuration mismatch: a node started with different [`Parameters`] derives
+/// a different proof-of-possession context and expects a different commitment count, so every honest
+/// peer looks wrong to it. A stale session ID behaves the same way. Check the local configuration
+/// before excluding the named party.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "message from party {party} does not fit the local protocol view ({reason}); this is usually a \
+     local configuration mismatch and does not prove party {party} misbehaved"
+)]
+pub struct MalformedMessageError {
+    party: usize,
+    reason: &'static str,
+}
+
+impl MalformedMessageError {
+    /// Creates the error naming the claimed sender and why its message did not fit.
+    #[must_use]
+    pub fn new(party: usize, reason: &'static str) -> Self {
+        Self { party, reason }
+    }
+
+    /// The claimed sender. This party is *not* accused; see the type documentation.
+    #[must_use]
+    pub fn party_id(&self) -> usize {
+        self.party
+    }
+}
+
+/// Why a participant's protocol message was rejected.
+///
+/// Only [`MessageError::MaliciousParty`] and [`MessageError::DuplicateCommitments`] attribute blame.
+/// [`MessageError::Malformed`] usually means the *local* node is misconfigured, and
+/// [`MessageError::LocalFault`] means the caller misused the API, so no remote message was evaluated.
+/// Use [`MessageError::attributable_parties`] to act on blame; every variant names the parties
+/// involved in its `Display` output, so a log line is still useful.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum MessageError {
+    /// A cryptographic check failed, so the named sender is provably at fault.
+    #[error(transparent)]
+    MaliciousParty(#[from] MaliciousPartyError),
+    /// Two named parties committed to the same constant term, so both are at fault.
+    #[error(transparent)]
+    DuplicateCommitments(#[from] DuplicateCommitmentsError),
+    /// The message does not fit the local protocol view; blame is not attributable.
+    #[error(transparent)]
+    Malformed(#[from] MalformedMessageError),
+    /// The local caller supplied invalid input, so no remote message was evaluated.
+    #[error(transparent)]
+    LocalFault(#[from] eyre::Report),
+}
+
+impl MessageError {
+    /// Wraps a local-fault message.
+    pub(crate) fn local(reason: String) -> Self {
+        Self::LocalFault(eyre::eyre!(reason))
+    }
+
+    /// The parties this error proves are at fault, empty when it attributes no blame.
+    #[must_use]
+    pub fn attributable_parties(&self) -> Vec<usize> {
+        match self {
+            Self::MaliciousParty(error) => vec![error.0],
+            Self::DuplicateCommitments(error) => vec![error.0.0, error.0.1],
+            Self::Malformed(_) | Self::LocalFault(_) => Vec::new(),
+        }
+    }
+}
+
+/// A [`Result`] whose error separates attributable misbehaviour from a local fault.
+pub type MessageResult<T> = Result<T, MessageError>;

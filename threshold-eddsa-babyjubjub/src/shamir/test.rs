@@ -224,9 +224,7 @@ fn signer_rejects_mismatched_identity_and_insufficient_sets() {
         EdDSACommitmentsShamir::pre_agg(&[commitment]).expect("valid single-party commitment set");
     let other_party_share = DLogShareShamir::new(ScalarField::rand(&mut rng), &public_key, 2, 2, 1)
         .expect("valid metadata for another party");
-    let Err(_) =
-        session.sign_round(Uuid::new_v4(), &other_party_share, message, aggregate)
-    else {
+    let Err(_) = session.sign_round(Uuid::new_v4(), &other_party_share, message, aggregate) else {
         panic!("a nonce session must not sign for another key-share identity");
     };
 
@@ -236,9 +234,12 @@ fn signer_rejects_mismatched_identity_and_insufficient_sets() {
     let two_party_threshold_share =
         DLogShareShamir::new(ScalarField::rand(&mut rng), &public_key, 1, 2, 2)
             .expect("valid two-party threshold metadata");
-    let Err(_) =
-        session.sign_round(Uuid::new_v4(), &two_party_threshold_share, message, aggregate)
-    else {
+    let Err(_) = session.sign_round(
+        Uuid::new_v4(),
+        &two_party_threshold_share,
+        message,
+        aggregate,
+    ) else {
         panic!("a signer must reject a set below its bound threshold");
     };
 }

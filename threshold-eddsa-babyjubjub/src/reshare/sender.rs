@@ -15,7 +15,6 @@ use crate::{
 };
 use ark_ec::CurveGroup;
 use ark_ff::UniformRand;
-use ark_serialize::CompressedChecked;
 use eyre::Result;
 use rand::{CryptoRng, Rng};
 use std::collections::{BTreeMap, BTreeSet};
@@ -43,6 +42,16 @@ impl<C: CurveGroup> ReShareProtocolSender<C> {
     /// `my_share` is this party's Shamir share of the signing key as held under the old
     /// [`Parameters`](crate::keygen::Parameters). Both the old and the new parameters, as well as
     /// the set of old parties handing the key over, are taken from `reshare_set`.
+    ///
+    /// This function borrows `my_share`; it does not consume, revoke, or erase the old share.
+    /// After a globally agreed successful handover, the application must securely retire old
+    /// shares and prevent honest parties from participating in stale-epoch signing sessions.
+    ///
+    /// `session_id` must be the same for every participant *and* globally unique per run. It is the
+    /// only run-specific input to the proof-of-possession context, so reusing it with the same
+    /// parameters makes this broadcast replayable into a later run, where the sender's fresh
+    /// evaluations fail against the stale commitments and the honest sender is blamed. Use a fresh
+    /// [`Uuid::new_v4`] per run.
     ///
     /// # Errors
     /// Returns an error if `party_index` is zero or larger than the number of parties allowed by the
@@ -108,7 +117,7 @@ impl<C: CurveGroup> ReShareProtocolSender<C> {
     pub fn get_broadcast_message(&self) -> BroadcastMessage<C> {
         BroadcastMessage {
             session_id: self.session_id,
-            commitments: CompressedChecked(self.commitments.clone()),
+            commitments: self.commitments.clone(),
             nizk: self.nizk.clone(),
         }
     }
@@ -191,7 +200,7 @@ impl<C: CurveGroup> ReShareProtocolSender<C> {
     /// Ignore a new party that missed the externally agreed verdict deadline.
     ///
     /// Every honest participant must apply the identical exclusion set, matching
-    /// [`ReShareBlameRound::disqualify_missing_verdict`](crate::reshare::blame::ReShareBlameRound::disqualify_missing_verdict).
+    /// [`ReShareBlameRound::exclude_missing_verdict`](crate::reshare::blame::ReShareBlameRound::exclude_missing_verdict).
     /// A sender that applies a different set derives a different accuser set and is disqualified by
     /// the receivers for an inconsistent revelation.
     ///

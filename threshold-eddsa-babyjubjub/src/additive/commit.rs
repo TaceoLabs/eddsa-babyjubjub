@@ -107,10 +107,14 @@ impl EdDSACommitmentsAdditive {
             || commitment_by_party.keys().copied().collect::<Vec<_>>()
                 != self.0.contributing_parties
         {
-            return Err(eyre::eyre!("nonce commitments do not match the contributing party set").into());
+            return Err(
+                eyre::eyre!("nonce commitments do not match the contributing party set").into(),
+            );
         }
         if x_share_commitments.keys().copied().collect::<Vec<_>>() != self.0.contributing_parties {
-            return Err(eyre::eyre!("public-key shares do not match the contributing party set").into());
+            return Err(
+                eyre::eyre!("public-key shares do not match the contributing party set").into(),
+            );
         }
         let (individual_d, individual_e) = commitment_by_party.values().fold(
             (Projective::zero(), Projective::zero()),
@@ -178,6 +182,9 @@ impl EdDSACommitmentsAdditive {
 
     /// The accumulating party (i.e., the aggregatir) combines the shares of `n` parties.
     /// The returned points are the combined commitments C, R.
+    ///
+    /// As in [`EdDSACommitmentsShamir::pre_agg`](crate::shamir::commit::EdDSACommitmentsShamir::pre_agg),
+    /// duplicate party IDs are rejected but duplicate `(d, e)` pairs are not.
     ///
     /// # Errors
     /// Returns an error for an empty set or duplicate/invalid party IDs.

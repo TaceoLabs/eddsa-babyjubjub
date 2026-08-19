@@ -21,6 +21,13 @@ pub struct ReShareSenderSet<C: CurveGroup> {
 
 impl<C: CurveGroup> ReShareSenderSet<C> {
     /// Start the construction of a new [`ReShareSenderSet`].
+    ///
+    /// `pk` is stored as given; unlike the per-party shares in [`ReShareSenderSet::add_party`], it is
+    /// not checked to be a non-zero point in the prime-order subgroup. A degenerate `pk` with
+    /// matching shares therefore passes [`ReShareSenderSet::correct`] and reaches
+    /// [`Finished::pk`](crate::keygen::finished::Finished::pk); it is rejected later, by
+    /// [`DLogShareShamir::new`](crate::shamir::secret::DLogShareShamir::new). Supply `pk` from
+    /// authenticated DKG or reshare output.
     pub fn for_pk_and_parameters(
         pk: C::Affine,
         old_parameters: Parameters,

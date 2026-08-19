@@ -5,8 +5,8 @@
 
 use crate::{
     keygen::{
-        MaliciousPartyError, Parameters, SecretScalarMap, SecretScalars, blame::BlameRound,
-        finished::Finished,
+        MalformedMessageError, MaliciousPartyError, MessageError, MessageResult, Parameters,
+        SecretScalarMap, SecretScalars, blame::BlameRound, finished::Finished,
     },
     shamir::utils,
 };
@@ -56,10 +56,14 @@ impl<C: CurveGroup> RoundTwo<C> {
     /// The message has to be sent using a private communication channel, and should not be available to other parties.
     ///
     /// # Errors
-    /// Returns an error if `for_party` is not a valid party index for the used [`Parameters`].
+    /// Returns an error if `for_party` is not a valid party index for the used [`Parameters`] or
+    /// if that party was disqualified in round one.
     pub fn get_party_communication(&self, for_party: u16) -> Result<RoundTwoCommunication<C>> {
         if for_party == 0 {
             eyre::bail!("party index must be non-zero",);
+        }
+        if self.disqualified_parties.contains(&for_party) {
+            eyre::bail!("party {for_party} was disqualified in round one");
         }
         let idx = usize::from(for_party) - 1;
         let secret_share = *self.secret_shares.get(idx).ok_or(eyre::eyre!(
@@ -75,43 +79,23 @@ impl<C: CurveGroup> RoundTwo<C> {
     /// Add a [`RoundTwoCommunication`] received from a party, verifying that everything is in order.
     ///
     /// # Errors
-    /// Returns a [`MaliciousPartyError`] identifying the offending party if its message carries a
-    /// different session id, or a secret share that does not verify against the commitments this
-    /// party broadcast in the first round.
-    /// All other errors indicate an invalid `from` index and are usually the fault of the local
-    /// party.
+    /// Returns [`MessageError::MaliciousParty`] if the secret share does not verify against the
+    /// commitments the sender broadcast in round one; this attributes blame.
+    /// [`MessageError::Malformed`] (session id mismatch) and [`MessageError::LocalFault`] (invalid
+    /// sender, unqualified dealer, duplicate delivery) do not.
     pub fn add_party_communication(
         &mut self,
         from: u16,
         comm: &RoundTwoCommunication<C>,
-    ) -> Result<()> {
-        if from == 0 {
-            eyre::bail!("party index must be non-zero",);
-        }
-        if from > self.params.number_of_parties {
-            eyre::bail!("party index {from} invalid for parameters",);
-        }
-        if from == self.my_idx {
-            eyre::bail!("do not add messages from own party {from}",);
-        }
-        if !self.commitments.contains_key(&from) {
-            eyre::bail!("party {from} is not a qualified dealer");
-        }
-
-        if self.received_party_messages.contains_key(&from) {
-            eyre::bail!("already added message for party {from}");
-        }
-
-        if self.session_id != comm.session_id {
-            eyre::bail!("session id mismatch for party {from}");
-        }
+    ) -> MessageResult<()> {
+        self.validate_message(from, comm)?;
 
         if !utils::verify_polynomial_evaluation::<C>(
             &self.commitments[&from],
             self.my_idx,
             &comm.secret_share,
         ) {
-            eyre::bail!(MaliciousPartyError::new(from as usize));
+            return Err(MaliciousPartyError::new(from as usize).into());
         }
         self.received_party_messages.insert(from, comm.secret_share);
         Ok(())
@@ -120,36 +104,18 @@ impl<C: CurveGroup> RoundTwo<C> {
     /// Add a private share while retaining malformed shares for the optional public blame round.
     ///
     /// Unlike [`RoundTwo::add_party_communication`], a share that fails its polynomial equation is
-    /// recorded as a complaint rather than returning [`MaliciousPartyError`]. Structural errors,
-    /// duplicate messages, and session mismatches still return an error.
+    /// recorded as a complaint rather than returning [`MessageError::MaliciousParty`]. Structural
+    /// errors, duplicate messages, and session mismatches still return an error.
     ///
     /// # Errors
-    /// Returns an error for an invalid sender, duplicate communication, or mismatched session.
+    /// Returns [`MessageError::Malformed`] for a session mismatch and [`MessageError::LocalFault`]
+    /// for an invalid sender or duplicate communication. Neither attributes blame.
     pub fn add_party_communication_for_blame(
         &mut self,
         from: u16,
         comm: &RoundTwoCommunication<C>,
-    ) -> Result<()> {
-        if from == 0 {
-            eyre::bail!("party index must be non-zero",);
-        }
-        if from > self.params.number_of_parties {
-            eyre::bail!("party index {from} invalid for parameters",);
-        }
-        if from == self.my_idx {
-            eyre::bail!("do not add messages from own party {from}");
-        }
-        if !self.commitments.contains_key(&from) {
-            eyre::bail!("party {from} is not a qualified dealer");
-        }
-
-        if self.received_party_messages.contains_key(&from) {
-            eyre::bail!("already added message for party {from}");
-        }
-
-        if self.session_id != comm.session_id {
-            eyre::bail!("session id mismatch for party {from}");
-        }
+    ) -> MessageResult<()> {
+        self.validate_message(from, comm)?;
 
         if !utils::verify_polynomial_evaluation::<C>(
             &self.commitments[&from],
@@ -159,6 +125,44 @@ impl<C: CurveGroup> RoundTwo<C> {
             self.failed_parties.insert(from);
         }
         self.received_party_messages.insert(from, comm.secret_share);
+        Ok(())
+    }
+
+    /// Checks shared by both intake paths: nothing here inspects the share itself, so no rejection
+    /// attributes blame.
+    fn validate_message(&self, from: u16, comm: &RoundTwoCommunication<C>) -> MessageResult<()> {
+        if from == 0 {
+            return Err(MessageError::local(
+                "party index must be non-zero".to_owned(),
+            ));
+        }
+        if from > self.params.number_of_parties {
+            return Err(MessageError::local(format!(
+                "party index {from} invalid for parameters"
+            )));
+        }
+        if from == self.my_idx {
+            return Err(MessageError::local(format!(
+                "do not add messages from own party {from}"
+            )));
+        }
+        if !self.commitments.contains_key(&from) {
+            return Err(MessageError::local(format!(
+                "party {from} is not a qualified dealer"
+            )));
+        }
+        if self.received_party_messages.contains_key(&from) {
+            return Err(MessageError::local(format!(
+                "already added message for party {from}"
+            )));
+        }
+        if self.session_id != comm.session_id {
+            return Err(MalformedMessageError::new(
+                from as usize,
+                "session id does not match the local session",
+            )
+            .into());
+        }
         Ok(())
     }
 
@@ -242,7 +246,12 @@ impl<C: CurveGroup> RoundTwo<C> {
             .values()
             .fold(C::zero(), |acc, x| acc + x[0]);
 
+        // `commitments` is a `HashMap`; sort so the reported set is comparable across parties.
+        let mut contributing_parties = self.commitments.keys().copied().collect::<Vec<_>>();
+        contributing_parties.sort_unstable();
+
         Ok(Finished {
+            contributing_parties,
             my_idx: self.my_idx,
             session_id: self.session_id,
             sk_share: my_secret_key_share,

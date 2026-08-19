@@ -245,6 +245,11 @@ impl<C: CurveGroup> ReShareBlameRound<C> {
 
     /// Finalize using the surviving old senders and freshly recomputed Lagrange coefficients.
     ///
+    /// The public-key check below is not an agreement check: every valid sender set reconstructs the
+    /// same key. Compare
+    /// [`Finished::agreement_digest`](crate::keygen::finished::Finished::agreement_digest) across
+    /// receivers before erasing the old shares.
+    ///
     /// # Errors
     /// Returns an error while messages remain unresolved, if fewer than the old threshold senders
     /// survive, or if their constant commitments do not reconstruct the original public key.
@@ -313,6 +318,8 @@ impl<C: CurveGroup> ReShareBlameRound<C> {
                 sk_share: my_secret_key_share,
                 pk_shares: public_key_shares,
                 pk: self.reshare_senders.pk,
+                // Old-committee indices, ascending because `senders` is a `BTreeMap`.
+                contributing_parties: qualified,
             },
             disqualified_parties: self.disqualified_senders.into_iter().collect(),
             excluded_verdict_parties: self.excluded_verdict_parties.into_iter().collect(),

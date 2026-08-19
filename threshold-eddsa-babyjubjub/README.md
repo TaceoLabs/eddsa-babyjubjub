@@ -76,6 +76,11 @@ that complete the step must accept the same payload from that sender. Do not
 advance merely because a local node has received enough mutually inconsistent
 point-to-point copies.
 
+Protocol deserializers cap participant-sized collections at the largest count
+representable by a `u16`. This is a defense-in-depth limit, not a network frame
+limit: reject oversized byte frames before invoking Serde, because the input
+format and individual field encodings may allocate while decoding.
+
 ## Threshold signing
 
 The primary API is in the `shamir` module:
@@ -135,10 +140,30 @@ each logical signing attempt, and ensure every participant agrees on the same
 session ID, signer set, public key, and message. Secret-key shares and DKG or
 reshare polynomial evaluations must be stored and transported as secrets.
 
+### Side-channel limitations
+
+The Baby Jubjub implementation uses arkworks curve and field arithmetic. The
+arkworks 0.6 scalar-multiplication implementation is not guaranteed to be
+constant-time and includes secret-dependent control flow. Consequently, this
+crate must not be treated as resistant to local timing, cache, branch-trace,
+power, or similar side-channel attackers. Deploy it only where that threat is
+excluded or use a separately reviewed constant-time arithmetic backend.
+
 ## Distributed key generation
 
 `keygen::Parameters::new(n, t)` configures an `n`-party sharing whose polynomial
-degree is `t - 1`; any `t` resulting shares can sign.
+degree is `t - 1`; any `t` resulting shares can sign. Note that the source
+protocol document uses `t` for the polynomial _degree_ instead, so its `t` maps
+to `Parameters::new(n, t + 1)` here.
+
+Session IDs for key generation and resharing must be globally unique per run,
+not merely agreed. The session ID is the only run-specific input to the
+proof-of-possession context, so reusing it with the same parameters makes
+round-one broadcasts replayable: an adversary with network control can suppress
+an honest party's fresh broadcast, inject its stale one from the earlier run, and
+have that party's fresh private evaluations fail against the stale commitments —
+which gets an honest party blamed and disqualified. Use a fresh `Uuid::new_v4`
+per run and never derive the ID from configuration alone.
 
 1. Every party creates `keygen::round1::RoundOne` with identical parameters and
    session ID. It reliably broadcasts `get_broadcast_message()`, containing its
@@ -184,9 +209,13 @@ keeps a `pk_shares` entry and `finalize()` returns its share. Its ID is still
 listed in `BlameResult::disqualified_parties`; exclude a proven cheater from
 future signing committees at the application layer if that is the intent.
 Round-one disqualifications are different: those parties never reached round two,
-so they are not shareholders and hold nothing. Every disqualification API refuses
-the decision that would leave fewer than `t` parties, so a run can never silently
-produce an unusable key.
+so they are not shareholders and hold nothing. `disqualify_parties` and
+`disqualify_missing_verdict` refuse a decision that would leave fewer than `t`
+parties. `disqualify_missing_dealer` and the implicit disqualification of an
+invalid revelation do not: those are caught one step later, by `finalize`, which
+refuses to produce a key from fewer than `t` qualified dealers. Either way a run
+can never silently produce an unusable key, but check the count yourself if you
+want the failure attributed to the decision that caused it.
 
 If a selected dealer's private round-two evaluation never arrives, call
 `complain_missing_party` after an externally agreed delivery deadline, then
@@ -208,6 +237,16 @@ dealer set.
 Resharing replaces the Shamir sharing while preserving the secret key and
 public key. It can change `n`, change `t`, rotate participants, or refresh shares
 for the same configuration.
+
+> [!WARNING]
+> Resharing does not cryptographically revoke or erase the old shares. During
+> handover, both the old and new sharings authorize the same public key. After
+> every honest participant has durably committed to the same successful new
+> epoch, securely erase the old shares and make honest signers reject stale
+> epoch/session coordination. Epoch checks alone cannot stop an attacker that
+> has retained an old threshold. Proactive security across refreshes requires
+> secure erasure and fewer than the threshold shares being compromised in each
+> epoch; otherwise retained shares can accumulate across epochs.
 
 1. All participants first agree on identical old and new `Parameters`, the old
    public key, a fresh session ID, and a selected old-party sender set containing
@@ -254,8 +293,26 @@ it may already possess. At least the new threshold number of receivers must
 remain. The exclusion is reported in `BlameResult::excluded_verdict_parties`.
 
 Do not let each receiver choose its own sender set or independently decide which
-senders timed out. Doing so can create divergent shares and public-key-share
-metadata even when every local cryptographic check succeeds.
+senders timed out, and note that **the public-key check cannot detect a
+violation**. Resharing combines the surviving senders as
+`P_S(Z) = Σ_{i∈S} λ_i^S · f_i(Z)`; every Lagrange coefficient depends on the
+surviving set `S`, but `P_S(0)` is the signing key for _every_ valid `S`.
+Receivers that disagreed on `S` therefore hold points on unrelated polynomials
+while both reconstruct the correct public key, so `finalize` succeeds on both
+sides and the shares silently fail to interpolate. The DKG has no such blind
+spot: there a divergent dealer set changes the public key itself.
+
+Compare `Finished::agreement_digest()` across all receivers and treat any
+mismatch as a failed run **before** erasing the old shares. The digest covers the
+session ID, `contributing_parties`, `pk`, and `pk_shares` — everything that must
+agree — and excludes the per-party `my_idx` and `sk_share`. The surviving sender
+set is also reported directly as `Finished::contributing_parties`; for a reshare
+these are old-committee indices, whereas `pk_shares` is keyed by new-party index.
+
+In particular, the choice between `complain_missing_share` and
+`disqualify_missing_sender` must itself be an externally agreed decision: both
+are reachable whenever nothing has been recorded for a sender, and only the
+former keeps it in `S`.
 
 ## Outputs and interoperability
 
@@ -264,6 +321,37 @@ DKG and reshare return `keygen::finished::Finished<C>`. For Baby Jubjub, use
 `shamir::secret::DLogShareShamir` for signing by binding the share to its party
 ID, total party count, and threshold; `pk` and `pk_shares` supply the public
 values required for verification and identifiable abort.
+`contributing_parties` names the qualified dealers or surviving old senders, and
+`agreement_digest()` reduces every value that must agree across participants to
+one comparable 32-byte hash.
+
+There is deliberately no automatic conversion to `DLogShareShamir`, because
+`Finished` does not carry the run's `Parameters`. Supply the party count and
+threshold yourself, and take care: a wrong-but-self-consistent value is accepted
+silently. `sign_round` derives the Lagrange coefficient from the signer set, so a
+too-small threshold only loosens the minimum-signer-set check and a too-large
+party count only loosens the range check. Neither enables a forgery, but neither
+is caught either. After a reshare, pass the _new_ parameters.
+
+## Error attribution
+
+The message-intake APIs — `RoundOne::add_party_communication`,
+`RoundTwo::add_party_communication`, and the `ReShareProtocolReceiver` intake
+methods — return `keygen::MessageError`, which keeps three outcomes apart:
+
+- `MaliciousParty` and `DuplicateCommitments` **attribute blame**: a
+  cryptographic check failed and the named parties are provably at fault.
+- `Malformed` does not. The message did not fit the local protocol view, most
+  often because the _local_ node is misconfigured — a node started with different
+  `Parameters` derives a different proof-of-possession context and expects a
+  different commitment count, so every honest peer looks wrong to it.
+  Disqualifying on this basis would remove an honest participant.
+- `LocalFault` means the caller misused the API, so no remote message was
+  evaluated.
+
+Use `MessageError::attributable_parties()` to act on blame. Every variant names
+the parties involved in its `Display` output, so logging the error no longer
+discards the attribution — but only the first two justify a disqualification.
 
 The final threshold signature is an
 `eddsa_babyjubjub::EdDSASignature` and is verified exactly like a regular

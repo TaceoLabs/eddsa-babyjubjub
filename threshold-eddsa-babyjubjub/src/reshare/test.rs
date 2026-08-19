@@ -841,3 +841,102 @@ fn reshare_sender_refuses_to_disclose_its_key_share() {
         "unexpected error: {error}"
     );
 }
+
+/// Two receivers that survive with different sender sets both pass the public-key check, so only the
+/// agreement digest catches the divergence — and the resulting shares really are incompatible.
+#[test]
+fn divergent_sender_sets_are_caught_only_by_the_agreement_digest() {
+    let mut rng = rand::thread_rng();
+    // Four senders for a threshold of three, so dropping one still reconstructs the old key.
+    let old_params = Parameters::new(4, 3);
+    let new_params = Parameters::new(3, 2);
+    let old_parties = run_keygen(4, 3, Uuid::new_v4(), &mut rng);
+    let sk_shares = old_parties.iter().map(|p| p.sk_share).collect::<Vec<_>>();
+    let secret_key = test_utils::reconstruct_random_shares(&sk_shares, 2, &mut rng);
+
+    let session_id = Uuid::new_v4();
+    let mut sender_set =
+        ReShareSenderSet::<Curve>::for_pk_and_parameters(old_parties[0].pk, old_params, new_params);
+    for id in 1..=4u16 {
+        sender_set
+            .add_party(id, old_parties[party_position(id)].pk_shares[&id])
+            .expect("honest old party");
+    }
+    sender_set.correct().expect("all four senders recombine");
+
+    let senders = (1..=4u16)
+        .map(|id| {
+            ReShareProtocolSender::new(
+                id,
+                &old_parties[party_position(id)].sk_share,
+                sender_set.clone(),
+                session_id,
+                &mut rng,
+            )
+            .expect("valid old sender")
+        })
+        .collect::<Vec<_>>();
+    let broadcasts = senders
+        .iter()
+        .map(ReShareProtocolSender::get_broadcast_message)
+        .collect::<Vec<_>>();
+
+    let finished = (1..=2u16)
+        .map(|receiver| {
+            let mut state = ReShareProtocolReceiver::new(receiver, sender_set.clone(), session_id)
+                .expect("valid new receiver");
+            for sender in 1..=4u16 {
+                // Receiver 2 alone decides sender 4 timed out. Both choices are locally legal.
+                if receiver == 2 && sender == 4 {
+                    state
+                        .disqualify_missing_sender(sender)
+                        .expect("dropping one of four senders preserves the old key");
+                    continue;
+                }
+                let position = party_position(sender);
+                state
+                    .add_old_party_communication(
+                        sender,
+                        broadcasts[position].clone(),
+                        &senders[position]
+                            .get_party_communication(receiver)
+                            .expect("valid new receiver"),
+                    )
+                    .expect("honest sender communication");
+            }
+            state.finalize().expect("both sender sets finalize")
+        })
+        .collect::<Vec<_>>();
+
+    // Every check the protocol performs passes on both sides.
+    assert_eq!(finished[0].pk, old_parties[0].pk);
+    assert_eq!(finished[1].pk, old_parties[0].pk);
+    assert_eq!(finished[0].contributing_parties, vec![1, 2, 3, 4]);
+    assert_eq!(finished[1].contributing_parties, vec![1, 2, 3]);
+
+    assert_ne!(
+        finished[0].agreement_digest(),
+        finished[1].agreement_digest(),
+        "divergent sender sets must yield different agreement digests"
+    );
+
+    // The shares lie on different polynomials, so they no longer interpolate to the signing key.
+    let lagrange = crate::shamir::utils::lagrange_from_coeff::<ScalarField, _>(&[1u16, 2u16]);
+    assert_ne!(
+        test_utils::reconstruct(&[finished[0].sk_share, finished[1].sk_share], &lagrange),
+        secret_key,
+        "shares from divergent sender sets must not reconstruct the key"
+    );
+}
+
+/// An honest run agrees on the digest at every receiver.
+#[test]
+fn matching_reshare_runs_agree_on_the_agreement_digest() {
+    let mut rng = rand::thread_rng();
+    let parties = keygen_and_reshare(Parameters::new(3, 2), Parameters::new(4, 3), &mut rng);
+    let digest = parties[0].agreement_digest();
+    for party in &parties {
+        assert_eq!(party.agreement_digest(), digest);
+        assert_eq!(party.contributing_parties.len(), 2, "old threshold senders");
+    }
+}

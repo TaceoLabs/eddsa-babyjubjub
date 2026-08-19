@@ -89,6 +89,7 @@ impl<'de> Deserialize<'de> for EdDSACommitments {
             d: Affine,
             #[serde(with = "babyjubjub::affine")]
             e: Affine,
+            #[serde(deserialize_with = "crate::serde_utils::deserialize_protocol_vec")]
             contributing_parties: Vec<u16>,
         }
 
