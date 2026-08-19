@@ -4,13 +4,15 @@
 //! private channel, which the receiving party verifies against the commitments from the first round.
 
 use crate::{
-    keygen::{MaliciousPartyError, Parameters, SecretScalars, finished::Finished},
+    keygen::{
+        MaliciousPartyError, Parameters, SecretScalars, blame::BlameRound, finished::Finished,
+    },
     shamir::utils,
 };
 use ark_ec::CurveGroup;
 use eyre::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use uuid::Uuid;
 
 /// The state of the DKG protocol in the second round.
@@ -25,6 +27,7 @@ pub struct RoundTwo<C: CurveGroup> {
     pub(crate) my_idx: u16,
     pub(crate) params: Parameters,
     pub(crate) received_party_messages: HashMap<u16, C::ScalarField>,
+    pub(crate) failed_parties: BTreeSet<u16>,
 }
 
 /// Communication in the second round of the DKG protocol.
@@ -91,7 +94,7 @@ impl<C: CurveGroup> RoundTwo<C> {
         }
 
         if self.session_id != comm.session_id {
-            eyre::bail!(MaliciousPartyError::new(from as usize));
+            eyre::bail!("session id mismatch for party {from}");
         }
 
         if !utils::verify_polynomial_evaluation::<C>(
@@ -100,6 +103,48 @@ impl<C: CurveGroup> RoundTwo<C> {
             &comm.secret_share,
         ) {
             eyre::bail!(MaliciousPartyError::new(from as usize));
+        }
+        self.received_party_messages.insert(from, comm.secret_share);
+        Ok(())
+    }
+
+    /// Add a private share while retaining malformed shares for the optional public blame round.
+    ///
+    /// Unlike [`RoundTwo::add_party_communication`], a share that fails its polynomial equation is
+    /// recorded as a complaint rather than returning [`MaliciousPartyError`]. Structural errors,
+    /// duplicate messages, and session mismatches still return an error.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid sender, duplicate communication, or mismatched session.
+    pub fn add_party_communication_for_blame(
+        &mut self,
+        from: u16,
+        comm: &RoundTwoCommunication<C>,
+    ) -> Result<()> {
+        if from == 0 {
+            eyre::bail!("party index must be non-zero",);
+        }
+        if from > self.params.number_of_parties {
+            eyre::bail!("party index {from} invalid for parameters",);
+        }
+        if from == self.my_idx {
+            eyre::bail!("do not add messages from own party {from}");
+        }
+
+        if self.received_party_messages.contains_key(&from) {
+            eyre::bail!("already added message for party {from}");
+        }
+
+        if self.session_id != comm.session_id {
+            eyre::bail!("session id mismatch for party {from}");
+        }
+
+        if !utils::verify_polynomial_evaluation::<C>(
+            &self.commitments[&from],
+            self.my_idx,
+            &comm.secret_share,
+        ) {
+            self.failed_parties.insert(from);
         }
         self.received_party_messages.insert(from, comm.secret_share);
         Ok(())
@@ -164,5 +209,13 @@ impl<C: CurveGroup> RoundTwo<C> {
             pk_shares: public_key_shares,
             pk: public_key.into_affine(),
         })
+    }
+
+    /// Enter the optional public blame round after collecting every private share.
+    ///
+    /// # Errors
+    /// Returns an error unless all round-two communications have been collected.
+    pub fn blame_round(self) -> Result<BlameRound<C>> {
+        BlameRound::new(self)
     }
 }

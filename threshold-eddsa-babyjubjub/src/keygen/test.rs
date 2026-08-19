@@ -7,7 +7,7 @@ use crate::{
     shamir::{secret::DLogShareShamir, test::test_threshold_eddsa_inner, utils::test_utils},
 };
 use ark_ec::{AffineRepr, CurveGroup};
-use ark_ff::UniformRand;
+use ark_ff::{One, UniformRand};
 use eddsa_babyjubjub::EdDSAPublicKey;
 use rand::{CryptoRng, Rng};
 use uuid::Uuid;
@@ -222,4 +222,199 @@ fn test_keygen_and_sign_7_4() {
 #[test]
 fn test_keygen_and_sign_identifies_cheating_parties() {
     test_keygen_and_sign(7, 4, &[0, 2]);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlameTestMode {
+    Valid,
+    Malformed,
+    Missing,
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "Exercises the complete optional two-broadcast workflow"
+)]
+fn run_optional_blame_round(mode: BlameTestMode, num_parties: u16, threshold: u16) {
+    let mut rng = rand::thread_rng();
+    assert!(
+        num_parties >= 3,
+        "blame test fixture requires at least three parties"
+    );
+    let parameters = Parameters::new(num_parties, threshold);
+    let session_id = Uuid::new_v4();
+    let mut round1 = (1..=num_parties)
+        .map(|party| {
+            RoundOne::<Curve>::new(parameters, party, session_id, &mut rng)
+                .expect("valid DKG parameters")
+        })
+        .collect::<Vec<_>>();
+    let round1_broadcasts = round1
+        .iter()
+        .map(RoundOne::get_broadcast_message)
+        .collect::<Vec<_>>();
+    for (receiver, state) in round1.iter_mut().enumerate() {
+        for (dealer, broadcast) in round1_broadcasts.iter().enumerate() {
+            if receiver != dealer {
+                state
+                    .add_party_communication(party_id(dealer), broadcast.clone())
+                    .expect("honest round-one broadcast");
+            }
+        }
+    }
+
+    let mut round2 = round1
+        .into_iter()
+        .map(|state| state.round2().expect("round one complete"))
+        .collect::<Vec<_>>();
+    let mut private_shares = round2
+        .iter()
+        .map(|dealer| {
+            (1..=num_parties)
+                .map(|receiver| {
+                    dealer
+                        .get_party_communication(receiver)
+                        .expect("valid receiver")
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    // Dealer 1 equivocates only toward receiver 2, which will complain publicly.
+    private_shares[0][1].secret_share += crate::ScalarField::one();
+    for (receiver, state) in round2.iter_mut().enumerate() {
+        for (dealer, shares) in private_shares.iter().enumerate() {
+            if receiver != dealer {
+                state
+                    .add_party_communication_for_blame(party_id(dealer), &shares[receiver])
+                    .expect("well-formed private communication is retained for blame");
+            }
+        }
+    }
+
+    let mut blame_rounds = round2
+        .into_iter()
+        .map(|state| state.blame_round().expect("all private shares received"))
+        .collect::<Vec<_>>();
+    let verdicts = blame_rounds
+        .iter()
+        .map(crate::keygen::blame::BlameRound::verdict)
+        .collect::<Vec<_>>();
+    assert!(verdicts[0].is_ok());
+    assert_eq!(
+        verdicts[1]
+            .blamed_parties()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![1]
+    );
+    assert!(verdicts[2].is_ok());
+    for (receiver, state) in blame_rounds.iter_mut().enumerate() {
+        for (sender, verdict) in verdicts.iter().enumerate() {
+            if receiver != sender {
+                state
+                    .add_verdict(party_id(sender), verdict.clone())
+                    .expect("valid verdict broadcast");
+            }
+        }
+    }
+
+    let mut revelations = blame_rounds
+        .iter_mut()
+        .enumerate()
+        .map(|(dealer, state)| {
+            if mode == BlameTestMode::Missing && dealer == 0 {
+                None
+            } else {
+                state.revelation().expect("verdict exchange complete")
+            }
+        })
+        .collect::<Vec<_>>();
+    if mode == BlameTestMode::Malformed {
+        revelations[0]
+            .as_mut()
+            .expect("dealer 1 was accused")
+            .shares[0]
+            .share += crate::ScalarField::one();
+    }
+    for (receiver, state) in blame_rounds.iter_mut().enumerate() {
+        for (dealer, revelation) in revelations.iter().enumerate() {
+            if receiver != dealer
+                && let Some(revelation) = revelation
+            {
+                state
+                    .add_revelation(party_id(dealer), revelation)
+                    .expect("accused dealer's public revelation is processed");
+            }
+        }
+    }
+    if mode == BlameTestMode::Missing {
+        for state in &mut blame_rounds {
+            state
+                .disqualify_missing_dealer(1)
+                .expect("accused dealer can be disqualified after withholding its share");
+        }
+    }
+
+    let results = blame_rounds
+        .into_iter()
+        .map(crate::keygen::blame::BlameRound::finalize)
+        .collect::<Vec<_>>();
+    let expected_disqualified = if mode == BlameTestMode::Valid {
+        vec![]
+    } else {
+        vec![1]
+    };
+    if mode == BlameTestMode::Missing {
+        for disqualified in &expected_disqualified {
+            assert!(results[usize::from(*disqualified) - 1].is_err());
+        }
+    }
+    let honest_results = results
+        .iter()
+        .enumerate()
+        .filter(|(position, _)| !expected_disqualified.contains(&party_id(*position)))
+        .filter_map(|(_, result)| result.as_ref().ok())
+        .collect::<Vec<_>>();
+    let expected = &honest_results[0].finished;
+    for result in honest_results {
+        assert_eq!(result.disqualified_parties, expected_disqualified);
+        assert_eq!(
+            result
+                .disqualified_public_key_shares()
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            expected_disqualified
+        );
+        assert!(
+            result
+                .disqualified_public_key_shares()
+                .values()
+                .all(AffineRepr::is_zero),
+            "disqualified parties must have default public-key shares"
+        );
+        assert_eq!(result.finished.pk, expected.pk);
+        assert_eq!(result.finished.pk_shares, expected.pk_shares);
+        assert_eq!(
+            (Affine::generator() * result.finished.sk_share).into_affine(),
+            result.finished.pk_shares[&result.finished.my_idx]
+        );
+    }
+}
+
+#[test]
+fn optional_blame_round_accepts_valid_dealer_revelation() {
+    run_optional_blame_round(BlameTestMode::Valid, 3, 2);
+}
+
+#[test]
+fn optional_blame_round_disqualifies_malformed_dealer_revelation() {
+    run_optional_blame_round(BlameTestMode::Malformed, 3, 2);
+}
+
+#[test]
+fn optional_blame_round_disqualifies_missing_dealer_revelation() {
+    run_optional_blame_round(BlameTestMode::Missing, 3, 2);
 }

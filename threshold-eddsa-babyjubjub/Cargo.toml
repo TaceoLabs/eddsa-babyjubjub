@@ -31,5 +31,5 @@ zeroize = { workspace = true }
 workspace = true
 
 [features]
-default = ["additive"]
+default = []
 additive = []

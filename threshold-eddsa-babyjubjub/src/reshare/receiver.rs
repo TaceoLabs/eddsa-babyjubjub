@@ -99,10 +99,10 @@ impl<C: CurveGroup> ReShareProtocolReceiver<C> {
         }
 
         if self.session_id != commitments.session_id {
-            eyre::bail!(MaliciousPartyError::new(from as usize));
+            eyre::bail!("session id mismatch for party {from}");
         }
         if self.session_id != share.session_id {
-            eyre::bail!(MaliciousPartyError::new(from as usize));
+            eyre::bail!("session id mismatch for party {from}");
         }
 
         let pk_share = self.reshare_senders.senders[&from];

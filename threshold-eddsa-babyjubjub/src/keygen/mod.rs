@@ -3,6 +3,7 @@
 //! This module implements the distributed key generation (DKG) protocol that produces the
 //! Shamir shares of the signing key, without any party ever learning the key itself.
 
+pub mod blame;
 pub mod finished;
 pub mod round1;
 pub mod round2;

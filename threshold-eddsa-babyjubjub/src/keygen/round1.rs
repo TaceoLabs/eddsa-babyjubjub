@@ -17,7 +17,7 @@ use ark_serialize::CompressedChecked;
 use eyre::Result;
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use uuid::Uuid;
 
 /// The state of the DKG protocol in the first round.
@@ -139,7 +139,7 @@ impl<C: CurveGroup> RoundOne<C> {
         }
 
         if self.session_id != comm.session_id {
-            eyre::bail!(MaliciousPartyError::new(from as usize));
+            eyre::bail!("session id mismatch for party {from}");
         }
 
         // verify ZK proof
@@ -208,6 +208,7 @@ impl<C: CurveGroup> RoundOne<C> {
         Ok(RoundTwo {
             session_id: self.session_id,
             received_party_messages: HashMap::with_capacity(commitments.len() - 1),
+            failed_parties: BTreeSet::default(),
             commitments,
             secret_shares: SecretScalars(secret_shares),
             my_idx: self.my_idx,
