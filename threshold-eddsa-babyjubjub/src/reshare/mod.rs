@@ -4,6 +4,7 @@
 //! currently holding a key hand it over to a new, possibly differently sized, set of parties. The
 //! signing key itself is unchanged, only the Shamir sharing of it is replaced.
 
+pub mod blame;
 pub mod receiver;
 pub mod sender;
 pub mod sender_set;

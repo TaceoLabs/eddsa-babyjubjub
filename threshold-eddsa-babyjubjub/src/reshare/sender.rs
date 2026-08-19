@@ -7,6 +7,7 @@
 use crate::{
     keygen::{
         SecretScalars,
+        blame::{BlameRevelation, RevealedShare},
         schnorr::{self, SchnorrZkProof},
     },
     reshare::{BroadcastMessage, PartyMessage, sender_set::ReShareSenderSet},
@@ -17,6 +18,7 @@ use ark_ff::UniformRand;
 use ark_serialize::CompressedChecked;
 use eyre::Result;
 use rand::{CryptoRng, Rng};
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
 /// The senders in the `ReShare` protocol are the "old" parties, i.e., the set of parties currently holding the shares.
@@ -126,6 +128,30 @@ impl<C: CurveGroup> ReShareProtocolSender<C> {
         Ok(PartyMessage {
             session_id: self.session_id,
             secret_share,
+        })
+    }
+
+    /// Reveal the committed polynomial evaluation for every new party that accused this sender.
+    ///
+    /// # Errors
+    /// Returns an error if the accuser set is empty or contains an invalid new-party identifier.
+    pub fn get_blame_revelation(&self, accusers: &BTreeSet<u16>) -> Result<BlameRevelation<C>> {
+        if accusers.is_empty() {
+            eyre::bail!("cannot create a blame revelation without an accuser");
+        }
+        let mut shares = Vec::with_capacity(accusers.len());
+        for receiver in accusers {
+            if *receiver == 0 || *receiver > self.reshare_set.new_parameters.number_of_parties {
+                eyre::bail!("new party index {receiver} is invalid");
+            }
+            shares.push(RevealedShare {
+                receiver: *receiver,
+                share: utils::evaluate_poly(&self.coefficients, C::ScalarField::from(*receiver)),
+            });
+        }
+        Ok(BlameRevelation {
+            session_id: self.session_id,
+            shares,
         })
     }
 }

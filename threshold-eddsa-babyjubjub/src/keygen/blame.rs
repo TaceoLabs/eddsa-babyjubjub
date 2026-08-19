@@ -8,7 +8,7 @@ use crate::{
     keygen::{Parameters, SecretScalars, finished::Finished, round2::RoundTwo},
     shamir::utils,
 };
-use ark_ec::{AffineRepr, CurveGroup};
+use ark_ec::CurveGroup;
 use ark_ff::Zero;
 use eyre::Result;
 use serde::{Deserialize, Serialize};
@@ -58,20 +58,6 @@ pub struct BlameResult<C: CurveGroup> {
     pub finished: Finished<C>,
     /// Dealers identified by invalid, malformed, or missing revelations.
     pub disqualified_parties: Vec<u16>,
-}
-
-impl<C: CurveGroup> BlameResult<C> {
-    /// Return every disqualified party together with its default public-key share.
-    ///
-    /// Disqualified parties are inactive in the finalized sharing and therefore have the identity
-    /// point as their entry in [`Finished::pk_shares`].
-    #[must_use]
-    pub fn disqualified_public_key_shares(&self) -> BTreeMap<u16, C::Affine> {
-        self.disqualified_parties
-            .iter()
-            .map(|party| (*party, self.finished.pk_shares[party]))
-            .collect()
-    }
 }
 
 /// State for the optional public DKG complaint and blame workflow.
@@ -257,8 +243,7 @@ impl<C: CurveGroup> BlameRound<C> {
     /// Returns an error if verdict collection is incomplete, the dealer was not accused, or its
     /// accusation was already resolved.
     pub fn disqualify_missing_dealer(&mut self, dealer: u16) -> Result<()> {
-        let accusations = self.accusations()?;
-        if !accusations.contains_key(&dealer) {
+        if !self.accusations()?.contains_key(&dealer) {
             eyre::bail!("party {dealer} was not accused");
         }
         if !self.resolved_dealers.insert(dealer) {
@@ -287,10 +272,9 @@ impl<C: CurveGroup> BlameRound<C> {
     /// Returns an error until every verdict and required revelation has been processed, or if all
     /// dealers were disqualified.
     pub fn finalize(self) -> Result<BlameResult<C>> {
-        // The following is performed in accusations, which is called in missing_revelations
-        // if !self.verdicts_complete() {
-        //     eyre::bail!("cannot finalize before all verdicts are received");
-        // }
+        if !self.verdicts_complete() {
+            eyre::bail!("cannot finalize before all verdicts are received");
+        }
         if !self.missing_revelations()?.is_empty() {
             eyre::bail!("cannot finalize before all accusations are resolved");
         }
@@ -316,20 +300,18 @@ impl<C: CurveGroup> BlameRound<C> {
                     }
                 });
         let mut public_key_shares = HashMap::new();
-        for party in 1..=self.params.number_of_parties {
-            let share = if self.disqualified_dealers.contains(&party) {
-                C::Affine::zero()
-            } else {
-                qualified_dealers
-                    .iter()
-                    .fold(C::zero(), |acc, dealer| {
-                        acc + utils::evaluate_polynomial_in_exponent::<C>(
-                            &self.commitments[dealer],
-                            party,
-                        )
-                    })
-                    .into_affine()
-            };
+        for party in (1..=self.params.number_of_parties)
+            .filter(|party| !self.disqualified_dealers.contains(party))
+        {
+            let share = qualified_dealers
+                .iter()
+                .fold(C::zero(), |acc, dealer| {
+                    acc + utils::evaluate_polynomial_in_exponent::<C>(
+                        &self.commitments[dealer],
+                        party,
+                    )
+                })
+                .into_affine();
             public_key_shares.insert(party, share);
         }
         let public_key = qualified_dealers

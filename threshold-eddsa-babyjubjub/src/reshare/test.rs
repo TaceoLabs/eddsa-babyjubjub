@@ -11,7 +11,7 @@ use crate::{
     shamir::{secret::DLogShareShamir, test::test_threshold_eddsa_inner, utils::test_utils},
 };
 use ark_ec::{AffineRepr, CurveGroup};
-use ark_ff::UniformRand;
+use ark_ff::{One, UniformRand};
 use eddsa_babyjubjub::EdDSAPublicKey;
 use rand::{CryptoRng, Rng, seq::IteratorRandom as _};
 use uuid::Uuid;
@@ -389,4 +389,189 @@ fn test_repeated_reshare_and_sign_to_same_size_sets() {
 fn test_repeated_reshare_and_sign_identifies_cheating_parties() {
     // The set of parties shrinks and grows again before signing with two cheating parties
     test_repeated_reshare_and_sign((5, 3), &[(3, 2), (7, 4), (7, 4)], &[0, 2]);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReShareBlameTestMode {
+    Valid,
+    Malformed,
+    Missing,
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "Exercises the complete optional reshare blame workflow"
+)]
+fn run_reshare_blame_test(
+    mode: ReShareBlameTestMode,
+    old_params: Parameters,
+    new_params: Parameters,
+) {
+    assert!(old_params.number_of_parties > old_params.threshold);
+    let mut rng = rand::thread_rng();
+    let old_parties = run_keygen(
+        old_params.number_of_parties,
+        old_params.threshold,
+        Uuid::new_v4(),
+        &mut rng,
+    );
+    let session_id = Uuid::new_v4();
+    let mut sender_set =
+        ReShareSenderSet::<Curve>::for_pk_and_parameters(old_parties[0].pk, old_params, new_params);
+    for sender in 1..=old_params.number_of_parties {
+        sender_set
+            .add_party(
+                sender,
+                old_parties[party_position(sender)].pk_shares[&sender],
+            )
+            .expect("honest old public-key share");
+    }
+    sender_set
+        .correct()
+        .expect("all old shares reconstruct the key");
+
+    let sender_states = (1..=old_params.number_of_parties)
+        .map(|sender| {
+            ReShareProtocolSender::<Curve>::new(
+                sender,
+                &old_parties[party_position(sender)].sk_share,
+                sender_set.clone(),
+                session_id,
+                &mut rng,
+            )
+            .expect("valid old sender")
+        })
+        .collect::<Vec<_>>();
+    let broadcasts = sender_states
+        .iter()
+        .map(ReShareProtocolSender::get_broadcast_message)
+        .collect::<Vec<_>>();
+    let mut private_shares = sender_states
+        .iter()
+        .map(|sender| {
+            (1..=new_params.number_of_parties)
+                .map(|receiver| {
+                    sender
+                        .get_party_communication(receiver)
+                        .expect("valid new receiver")
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    // Dealer 1 equivocates only toward receiver 2, which will complain publicly.
+    private_shares[0][1].secret_share += ScalarField::one();
+    let mut receivers = (1..=new_params.number_of_parties)
+        .map(|receiver| {
+            let mut state = ReShareProtocolReceiver::new(receiver, sender_set.clone(), session_id)
+                .expect("valid new receiver");
+            for sender in 1..=old_params.number_of_parties {
+                state
+                    .add_old_party_communication_for_blame(
+                        sender,
+                        broadcasts[party_position(sender)].clone(),
+                        private_shares[party_position(sender)][party_position(receiver)].clone(),
+                    )
+                    .expect("sender communication retained for blame");
+            }
+            state.blame_round().expect("all sender messages received")
+        })
+        .collect::<Vec<_>>();
+    let verdicts = receivers
+        .iter()
+        .map(crate::reshare::blame::ReShareBlameRound::verdict)
+        .collect::<Vec<_>>();
+    assert!(verdicts[0].is_ok());
+    assert_eq!(
+        verdicts[1]
+            .blamed_parties()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![1]
+    );
+    for (receiver, state) in receivers.iter_mut().enumerate() {
+        for (sender, verdict) in verdicts.iter().enumerate() {
+            if receiver != sender {
+                state
+                    .add_verdict(party_id(sender), verdict.clone())
+                    .expect("valid new-party verdict");
+            }
+        }
+    }
+
+    let accusers = receivers[0].accusations().expect("all verdicts received")[&1].clone();
+    let mut revelation = if mode == ReShareBlameTestMode::Missing {
+        None
+    } else {
+        Some(
+            sender_states[0]
+                .get_blame_revelation(&accusers)
+                .expect("accused sender reveals committed shares"),
+        )
+    };
+    if mode == ReShareBlameTestMode::Malformed {
+        revelation
+            .as_mut()
+            .expect("malformed mode has a revelation")
+            .shares[0]
+            .share += ScalarField::one();
+    }
+    for state in &mut receivers {
+        if let Some(revelation) = &revelation {
+            state
+                .add_revelation(1, revelation)
+                .expect("old-sender revelation processed");
+        } else {
+            state
+                .disqualify_missing_sender(1)
+                .expect("missing old sender disqualified");
+        }
+    }
+
+    let results = receivers
+        .into_iter()
+        .map(|state| state.finalize().expect("enough qualified senders survive"))
+        .collect::<Vec<_>>();
+    let expected_disqualified = if mode == ReShareBlameTestMode::Valid {
+        vec![]
+    } else {
+        vec![1]
+    };
+    for result in &results {
+        assert_eq!(result.disqualified_parties, expected_disqualified);
+        assert_eq!(result.finished.pk, old_parties[0].pk);
+        assert_eq!(result.finished.pk_shares, results[0].finished.pk_shares);
+        assert_eq!(
+            (Affine::generator() * result.finished.sk_share).into_affine(),
+            result.finished.pk_shares[&result.finished.my_idx]
+        );
+    }
+}
+
+#[test]
+fn reshare_blame_accepts_valid_sender_revelation() {
+    run_reshare_blame_test(
+        ReShareBlameTestMode::Valid,
+        Parameters::new(4, 2),
+        Parameters::new(3, 2),
+    );
+}
+
+#[test]
+fn reshare_blame_disqualifies_malformed_sender_revelation() {
+    run_reshare_blame_test(
+        ReShareBlameTestMode::Malformed,
+        Parameters::new(4, 2),
+        Parameters::new(3, 2),
+    );
+}
+
+#[test]
+fn reshare_blame_disqualifies_missing_sender_revelation() {
+    run_reshare_blame_test(
+        ReShareBlameTestMode::Missing,
+        Parameters::new(4, 2),
+        Parameters::new(3, 2),
+    );
 }

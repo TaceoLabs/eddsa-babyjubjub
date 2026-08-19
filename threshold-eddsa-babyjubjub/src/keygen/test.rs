@@ -380,20 +380,15 @@ fn run_optional_blame_round(mode: BlameTestMode, num_parties: u16, threshold: u1
     let expected = &honest_results[0].finished;
     for result in honest_results {
         assert_eq!(result.disqualified_parties, expected_disqualified);
-        assert_eq!(
-            result
-                .disqualified_public_key_shares()
-                .keys()
-                .copied()
-                .collect::<Vec<_>>(),
-            expected_disqualified
-        );
         assert!(
-            result
-                .disqualified_public_key_shares()
-                .values()
-                .all(AffineRepr::is_zero),
-            "disqualified parties must have default public-key shares"
+            expected_disqualified
+                .iter()
+                .all(|party| !result.finished.pk_shares.contains_key(party)),
+            "disqualified parties must not have public-key shares"
+        );
+        assert_eq!(
+            result.finished.pk_shares.len(),
+            usize::from(num_parties) - expected_disqualified.len()
         );
         assert_eq!(result.finished.pk, expected.pk);
         assert_eq!(result.finished.pk_shares, expected.pk_shares);

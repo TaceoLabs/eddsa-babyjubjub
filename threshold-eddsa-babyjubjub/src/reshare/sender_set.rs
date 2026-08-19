@@ -1,8 +1,7 @@
 //! The set of old parties handing a key over in the `ReShare` protocol.
 //!
-//! This module defines the `ReShareSenderSet` struct, which pins down the threshold sized subset of
-//! the old parties taking part in the handover together with their shares of the public key, so that
-//! the receivers can check the communication they get from them.
+//! This module defines the `ReShareSenderSet` struct, which pins down a threshold-or-larger subset
+//! of the old parties taking part in the handover together with their public-key shares.
 
 use crate::{keygen::Parameters, shamir::utils};
 use ark_ec::CurveGroup;
@@ -35,28 +34,21 @@ impl<C: CurveGroup> ReShareSenderSet<C> {
         }
     }
 
-    /// Check if the set of parties is ready, i.e., if enough parties have been added to the set
+    /// Check if at least the old threshold number of parties have been added.
     pub fn ready(&self) -> bool {
-        self.senders.len() == usize::from(self.old_parameters.threshold)
+        self.senders.len() >= usize::from(self.old_parameters.threshold)
     }
 
     /// Adds a party to the set of `ReShare` senders. A party's public information is made up of its share of the public key
     ///
     /// # Errors
-    /// Returns an error if the set of senders is already complete, i.e., if [`ReShareSenderSet::ready`]
-    /// returns true, or if a party with the same `id` has been added before.
+    /// Returns an error if a party with the same `id` has been added before.
     pub fn add_party(&mut self, id: u16, pk_share: C::Affine) -> eyre::Result<()> {
         if id == 0 || id > self.old_parameters.number_of_parties {
             return Err(eyre::eyre!("Party id {id} is outside the old party set"));
         }
         if pk_share.check().is_err() {
             return Err(eyre::eyre!("Public-key share for party {id} is invalid"));
-        }
-        if self.ready() {
-            return Err(eyre::eyre!(
-                "Cannot add party {} to ReShareSenderSet, already have enough parties",
-                id
-            ));
         }
 
         if self.senders.contains_key(&id) {
