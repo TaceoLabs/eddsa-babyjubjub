@@ -16,15 +16,48 @@ use ark_ec::CurveGroup;
 use ark_ff::Zero;
 use eyre::Result;
 use std::collections::{BTreeSet, HashMap};
+use std::ops::{Deref, DerefMut};
 use uuid::Uuid;
 
 /// A receiver in the `ReShare` protocol is a party in the new set of parties.
 pub struct ReShareProtocolReceiver<C: CurveGroup> {
     pub(crate) my_idx: u16,
-    pub(crate) received_shares: HashMap<u16, (C::ScalarField, Vec<C::Affine>)>,
+    pub(crate) received_shares: ReceivedShares<C>,
     pub(crate) reshare_senders: ReShareSenderSet<C>,
     pub(crate) session_id: Uuid,
     pub(crate) failed_senders: BTreeSet<u16>,
+    pub(crate) pre_disqualified_senders: BTreeSet<u16>,
+}
+
+pub(crate) struct ReceivedShares<C: CurveGroup>(
+    pub(crate) HashMap<u16, (C::ScalarField, Vec<C::Affine>)>,
+);
+
+impl<C: CurveGroup> Deref for ReceivedShares<C> {
+    type Target = HashMap<u16, (C::ScalarField, Vec<C::Affine>)>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<C: CurveGroup> DerefMut for ReceivedShares<C> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<C: CurveGroup> Drop for ReceivedShares<C> {
+    #[allow(
+        clippy::iter_over_hash_type,
+        reason = "zeroization order has no semantic effect"
+    )]
+    fn drop(&mut self) {
+        use zeroize::Zeroize as _;
+        for (share, _) in self.0.values_mut() {
+            share.zeroize();
+        }
+    }
 }
 
 impl<C: CurveGroup> ReShareProtocolReceiver<C> {
@@ -50,10 +83,11 @@ impl<C: CurveGroup> ReShareProtocolReceiver<C> {
 
         Ok(ReShareProtocolReceiver {
             my_idx,
-            received_shares: HashMap::new(),
+            received_shares: ReceivedShares(HashMap::new()),
             reshare_senders,
             session_id,
             failed_senders: BTreeSet::new(),
+            pre_disqualified_senders: BTreeSet::new(),
         })
     }
 
@@ -71,15 +105,11 @@ impl<C: CurveGroup> ReShareProtocolReceiver<C> {
     /// of the public key, or the secret share does not verify against the commitments.
     /// All other errors indicate an invalid `from` index and are usually the fault of the local
     /// party.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "Keeps consistency with the broadcast message, which is consumed"
-    )]
     pub fn add_old_party_communication(
         &mut self,
         from: u16,
         commitments: BroadcastMessage<C>,
-        share: PartyMessage<C>,
+        share: &PartyMessage<C>,
     ) -> Result<()> {
         if from == 0 {
             eyre::bail!("party index must be non-zero",);
@@ -152,15 +182,11 @@ impl<C: CurveGroup> ReShareProtocolReceiver<C> {
     ///
     /// # Errors
     /// Returns an error for invalid sender metadata, commitments, proof of possession, or session.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "Keeps consistency with add_old_party_communication"
-    )]
     pub fn add_old_party_communication_for_blame(
         &mut self,
         from: u16,
         commitments: BroadcastMessage<C>,
-        share: PartyMessage<C>,
+        share: &PartyMessage<C>,
     ) -> Result<()> {
         if from == 0 {
             eyre::bail!("party index must be non-zero",);
@@ -233,6 +259,77 @@ impl<C: CurveGroup> ReShareProtocolReceiver<C> {
             .collect()
     }
 
+    /// Register a valid sender broadcast but complain that its private evaluation was missing.
+    ///
+    /// This lets the protocol enter the public blame round, where the sender can reveal the
+    /// committed evaluation or be disqualified after an externally agreed deadline.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid sender, previously received communication, or an invalid
+    /// broadcast, proof, session, or constant commitment.
+    pub fn complain_missing_share(
+        &mut self,
+        from: u16,
+        commitments: BroadcastMessage<C>,
+    ) -> Result<()> {
+        if from == 0
+            || from > self.reshare_senders.old_parameters.number_of_parties
+            || !self.reshare_senders.senders.contains_key(&from)
+        {
+            eyre::bail!("invalid selected old sender");
+        }
+        if self.received_shares.contains_key(&from) {
+            eyre::bail!("already added communication for sender {from}");
+        }
+        if commitments.commitments.len()
+            != usize::from(self.reshare_senders.new_parameters.threshold)
+            || commitments.session_id != self.session_id
+        {
+            eyre::bail!(MaliciousPartyError::new(from as usize));
+        }
+        let context = schnorr::proof_context(
+            Self::CONTEXT_DOMAIN,
+            self.session_id,
+            &[
+                self.reshare_senders.old_parameters,
+                self.reshare_senders.new_parameters,
+            ],
+        );
+        if !commitments.nizk.verify(
+            &context,
+            from,
+            &commitments.commitments[0],
+            &commitments.commitments[1..],
+        ) || commitments.commitments[0] != self.reshare_senders.senders[&from]
+        {
+            eyre::bail!(MaliciousPartyError::new(from as usize));
+        }
+        self.failed_senders.insert(from);
+        self.received_shares
+            .insert(from, (C::ScalarField::zero(), commitments.commitments.0));
+        Ok(())
+    }
+
+    /// Apply an externally agreed disqualification when a sender supplied no usable broadcast.
+    ///
+    /// # Errors
+    /// Returns an error if communication was already received, the sender was not selected, or
+    /// removing it would leave an invalid sender set that no longer reconstructs the old key.
+    pub fn disqualify_missing_sender(&mut self, from: u16) -> Result<()> {
+        if self.received_shares.contains_key(&from) {
+            eyre::bail!("sender {from}'s communication was already received");
+        }
+        let Some(removed_share) = self.reshare_senders.senders.remove(&from) else {
+            eyre::bail!("party {from} is not a selected old sender");
+        };
+        if let Err(error) = self.reshare_senders.correct() {
+            self.reshare_senders.senders.insert(from, removed_share);
+            eyre::bail!("cannot disqualify sender while preserving the old key: {error}");
+        }
+        self.pre_disqualified_senders.insert(from);
+        Ok(())
+    }
+
     /// Indicates if the protocol is ready to advance into the next state.
     /// See [`ReShareProtocolReceiver::get_missing_parties`] for parties we are still missing information from.
     pub fn can_advance(&self) -> bool {
@@ -252,6 +349,9 @@ impl<C: CurveGroup> ReShareProtocolReceiver<C> {
     pub fn finalize(self) -> Result<Finished<C>> {
         if !self.can_advance() {
             eyre::bail!("cannot finalize, not all messages received");
+        }
+        if !self.failed_senders.is_empty() {
+            eyre::bail!("cannot finalize with unresolved complaints; enter the blame round");
         }
 
         // The Lagrange coefficients are relative to the set of parties that actually took part in

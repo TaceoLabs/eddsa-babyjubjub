@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 /// Individual party's proof share for the `EdDSA` protocol.
 /// Carries a response share for the signature.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(transparent)]
 pub(crate) struct EdDSASigShare(
-    // The share of the response s
+    pub(crate) u16,
+    // The share of the response s.
     #[serde(with = "ark_serde_compat::field")] pub(crate) ScalarField,
 );

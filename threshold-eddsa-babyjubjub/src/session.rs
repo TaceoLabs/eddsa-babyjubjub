@@ -20,6 +20,7 @@ use zeroize::ZeroizeOnDrop;
 /// The `challenge` method consumes the session.
 #[derive(ZeroizeOnDrop)]
 pub struct EdDSASession {
+    pub(crate) party_id: u16,
     pub(crate) d: ScalarField,
     pub(crate) e: ScalarField,
 }
@@ -27,19 +28,29 @@ pub struct EdDSASession {
 impl EdDSASession {
     /// Computes commitments to two random values `d_share` and `e_share`, which will be the shares of the randomness used in the `EdDSA` signature.
     /// The result is meant to be sent to one accumulating party (i.e., the aggregator) who combines all the shares of all parties and creates the challenge hash.
-    pub fn pre_round(rng: &mut (impl CryptoRng + Rng)) -> (Self, PartialEdDSACommitments) {
+    ///
+    /// # Errors
+    /// Returns an error if `party_id` is zero.
+    pub fn pre_round(
+        party_id: u16,
+        rng: &mut (impl CryptoRng + Rng),
+    ) -> eyre::Result<(Self, PartialEdDSACommitments)> {
+        if party_id == 0 {
+            eyre::bail!("party ID must be non-zero");
+        }
         let d_share: ark_ff::Fp<ark_ff::MontBackend<ark_babyjubjub::FrConfig, 4>, 4> =
             ScalarField::rand(rng);
         let e_share = ScalarField::rand(rng);
         let d = (Affine::generator() * d_share).into_affine();
         let e = (Affine::generator() * e_share).into_affine();
-        let comm = PartialEdDSACommitments { d, e };
+        let comm = PartialEdDSACommitments { party_id, d, e };
 
         let session = EdDSASession {
+            party_id,
             d: d_share,
             e: e_share,
         };
 
-        (session, comm)
+        Ok((session, comm))
     }
 }

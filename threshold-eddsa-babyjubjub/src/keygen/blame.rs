@@ -5,7 +5,7 @@
 //! parties verify those revelations against the dealer's polynomial commitments.
 
 use crate::{
-    keygen::{Parameters, SecretScalars, finished::Finished, round2::RoundTwo},
+    keygen::{Parameters, SecretScalarMap, SecretScalars, finished::Finished, round2::RoundTwo},
     shamir::utils,
 };
 use ark_ec::CurveGroup;
@@ -51,13 +51,18 @@ pub struct BlameRevelation<C: CurveGroup> {
     pub(crate) shares: Vec<RevealedShare<C>>,
 }
 
-/// Successful output of a DKG that used the optional blame round.
+/// Successful output of DKG or resharing that used the optional blame round.
 #[non_exhaustive]
 pub struct BlameResult<C: CurveGroup> {
     /// The ordinary finalized DKG output, computed without disqualified dealer contributions.
     pub finished: Finished<C>,
-    /// Dealers identified by invalid, malformed, or missing revelations.
+    /// DKG dealers or old reshare senders excluded for invalid or missing protocol messages.
     pub disqualified_parties: Vec<u16>,
+    /// Verdict participants omitted after an externally agreed timeout.
+    ///
+    /// This is empty for DKG. During resharing these are new receivers whose missing verdict was
+    /// ignored for liveness; it does not revoke any key share they may already hold.
+    pub excluded_verdict_parties: Vec<u16>,
 }
 
 /// State for the optional public DKG complaint and blame workflow.
@@ -67,7 +72,7 @@ pub struct BlameRound<C: CurveGroup> {
     secret_shares: SecretScalars<C::ScalarField>,
     my_idx: u16,
     params: Parameters,
-    received_party_messages: HashMap<u16, C::ScalarField>,
+    received_party_messages: SecretScalarMap<C::ScalarField>,
     verdicts: BTreeMap<u16, BlameVerdict>,
     resolved_dealers: BTreeSet<u16>,
     disqualified_dealers: BTreeSet<u16>,
@@ -95,7 +100,7 @@ impl<C: CurveGroup> BlameRound<C> {
             received_party_messages: round_two.received_party_messages,
             verdicts,
             resolved_dealers: BTreeSet::new(),
-            disqualified_dealers: BTreeSet::new(),
+            disqualified_dealers: round_two.disqualified_parties,
         })
     }
 
@@ -112,17 +117,24 @@ impl<C: CurveGroup> BlameRound<C> {
     /// party identifier.
     pub fn add_verdict(&mut self, from: u16, verdict: BlameVerdict) -> Result<()> {
         self.validate_other_party(from)?;
+        if !self.commitments.contains_key(&from) {
+            eyre::bail!("party {from} was disqualified before the blame round");
+        }
+        if self.disqualified_dealers.contains(&from) {
+            eyre::bail!("party {from} was disqualified after missing its blame verdict");
+        }
         if self.verdicts.contains_key(&from) {
             eyre::bail!("already added blame verdict for party {from}");
         }
         if verdict.session_id != self.session_id {
             eyre::bail!("session id mismatch in blame verdict from party {from}");
         }
-        if verdict
-            .blamed_parties
-            .iter()
-            .any(|party| *party == 0 || *party > self.params.number_of_parties || *party == from)
-        {
+        if verdict.blamed_parties.iter().any(|party| {
+            *party == 0
+                || *party > self.params.number_of_parties
+                || *party == from
+                || !self.commitments.contains_key(party)
+        }) {
             eyre::bail!("invalid blamed party in verdict from party {from}");
         }
         self.verdicts.insert(from, verdict);
@@ -132,15 +144,52 @@ impl<C: CurveGroup> BlameRound<C> {
     /// Parties whose first blame-round broadcasts are still missing.
     #[must_use]
     pub fn missing_verdicts(&self) -> Vec<u16> {
-        (1..=self.params.number_of_parties)
+        self.commitments
+            .keys()
             .filter(|party| !self.verdicts.contains_key(party))
+            .filter(|party| !self.disqualified_dealers.contains(party))
+            .copied()
             .collect()
     }
 
     /// Whether every party's `Ok` or blame-set broadcast has been received.
     #[must_use]
     pub fn verdicts_complete(&self) -> bool {
-        self.verdicts.len() == usize::from(self.params.number_of_parties)
+        self.missing_verdicts().is_empty()
+    }
+
+    /// Disqualify a dealer whose blame verdict was missing or rejected.
+    ///
+    /// All honest parties must apply the same decision after an externally agreed deadline. The
+    /// dealer's polynomial contribution is excluded from the final DKG output.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid, pre-disqualified, local, already-resolved party, or a party
+    /// whose verdict was already accepted. It also returns an error if disqualification would leave
+    /// fewer than the configured threshold parties.
+    pub fn disqualify_missing_verdict(&mut self, party: u16) -> Result<()> {
+        self.validate_other_party(party)?;
+        if !self.commitments.contains_key(&party) {
+            eyre::bail!("party {party} was disqualified before the blame round");
+        }
+        if self.verdicts.contains_key(&party) {
+            eyre::bail!("party {party}'s blame verdict was already accepted");
+        }
+        if self.disqualified_dealers.contains(&party) {
+            eyre::bail!("party {party} was already disqualified");
+        }
+        let remaining = self
+            .commitments
+            .keys()
+            .filter(|dealer| !self.disqualified_dealers.contains(dealer))
+            .filter(|dealer| **dealer != party)
+            .count();
+        if remaining < usize::from(self.params.threshold) {
+            eyre::bail!("verdict disqualification would leave fewer than the threshold parties");
+        }
+        self.disqualified_dealers.insert(party);
+        self.resolved_dealers.insert(party);
+        Ok(())
     }
 
     /// Return the map from every accused dealer to its accusers.
@@ -227,7 +276,12 @@ impl<C: CurveGroup> BlameRound<C> {
                 .iter()
                 .find(|revealed| revealed.receiver == self.my_idx)
             {
-                self.received_party_messages.insert(from, revealed.share);
+                use zeroize::Zeroize as _;
+                if let Some(mut previous) =
+                    self.received_party_messages.insert(from, revealed.share)
+                {
+                    previous.zeroize();
+                }
             }
         } else {
             self.disqualified_dealers.insert(from);
@@ -282,11 +336,14 @@ impl<C: CurveGroup> BlameRound<C> {
             eyre::bail!("local party was disqualified and cannot obtain a secret-key share");
         }
 
-        let qualified_dealers = (1..=self.params.number_of_parties)
+        let qualified_dealers = self
+            .commitments
+            .keys()
             .filter(|dealer| !self.disqualified_dealers.contains(dealer))
+            .copied()
             .collect::<Vec<_>>();
-        if qualified_dealers.is_empty() {
-            eyre::bail!("cannot finalize after all dealers were disqualified");
+        if qualified_dealers.len() < usize::from(self.params.threshold) {
+            eyre::bail!("cannot finalize with fewer than the threshold qualified parties");
         }
 
         let my_secret_key_share =
@@ -300,8 +357,11 @@ impl<C: CurveGroup> BlameRound<C> {
                     }
                 });
         let mut public_key_shares = HashMap::new();
-        for party in (1..=self.params.number_of_parties)
+        for party in self
+            .commitments
+            .keys()
             .filter(|party| !self.disqualified_dealers.contains(party))
+            .copied()
         {
             let share = qualified_dealers
                 .iter()
@@ -327,6 +387,7 @@ impl<C: CurveGroup> BlameRound<C> {
                 pk: public_key.into_affine(),
             },
             disqualified_parties: self.disqualified_dealers.into_iter().collect(),
+            excluded_verdict_parties: Vec::new(),
         })
     }
 

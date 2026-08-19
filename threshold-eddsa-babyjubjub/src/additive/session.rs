@@ -30,14 +30,23 @@ pub struct EdDSASessionAdditive(EdDSASession);
 impl EdDSASessionAdditive {
     /// Computes commitments to two random values `d_share` and `e_share`, which will be the shares of the randomness used in the `EdDSA` signature.
     /// The result is meant to be sent to one accumulating party (i.e., the aggregator) who combines all the shares of all parties and creates the challenge hash.
-    pub fn pre_round(rng: &mut (impl CryptoRng + Rng)) -> (Self, PartialEdDSACommitmentsAdditive) {
-        let (session, comm) = EdDSASession::pre_round(rng);
-        (Self(session), PartialEdDSACommitmentsAdditive(comm))
+    ///
+    /// # Errors
+    /// Returns an error if `party_id` is zero.
+    pub fn pre_round(
+        party_id: u16,
+        rng: &mut (impl CryptoRng + Rng),
+    ) -> eyre::Result<(Self, PartialEdDSACommitmentsAdditive)> {
+        let (session, comm) = EdDSASession::pre_round(party_id, rng)?;
+        Ok((Self(session), PartialEdDSACommitmentsAdditive(comm)))
     }
 
     /// Finalizes a signature share for a given challenge hash and session.
     /// The session and information therein is consumed to prevent reuse of the randomness.
-    #[must_use]
+    ///
+    /// # Errors
+    /// Returns an error if the key-share metadata is invalid, the commitments do not contain the
+    /// complete canonical committee, or the nonce session and key share belong to different parties.
     pub fn sign_round(
         self,
         session_id: Uuid,
@@ -45,7 +54,22 @@ impl EdDSASessionAdditive {
         message: BaseField,
         public_key: &EdDSAPublicKey,
         EdDSACommitmentsAdditive(challenge_input): EdDSACommitmentsAdditive,
-    ) -> EdDSASigShareAdditive {
+    ) -> eyre::Result<EdDSASigShareAdditive> {
+        let parties = &challenge_input.contributing_parties;
+        crate::commit::EdDSACommitments::validate_party_ids(parties)?;
+        if x_share.party_id == 0
+            || x_share.number_of_parties == 0
+            || x_share.party_id > x_share.number_of_parties
+        {
+            eyre::bail!("invalid additive key-share metadata");
+        }
+        let expected = (1..=x_share.number_of_parties).collect::<Vec<_>>();
+        if parties.as_slice() != expected {
+            eyre::bail!("additive signing requires the complete canonical party set");
+        }
+        if self.0.party_id != x_share.party_id {
+            eyre::bail!("nonce session and key share belong to different parties");
+        }
         // Recombine the two-nonce randomness shares into the full randomness used in the challenge.
         let (r, b) = crate::nonce::combine_two_nonce_randomness(CombineTwoNonceRandomnessArgs {
             session_id,
@@ -61,7 +85,10 @@ impl EdDSASessionAdditive {
 
         // The following modular reduction in convert_base_to_scalar is required in rust to perform the scalar multiplications. Using all 254 bits of the base field in a double/add ladder would apply this reduction implicitly. We show in the docs of convert_base_to_scalar why this does not introduce a bias when applied to a uniform element of the base field.
         let c_ = eddsa_babyjubjub::convert_base_to_scalar(c);
-        let share = EdDSASigShare(self.0.d + b * self.0.e + c_ * x_share.0);
-        EdDSASigShareAdditive(share)
+        let share = EdDSASigShare(
+            x_share.party_id,
+            self.0.d + b * self.0.e + c_ * x_share.value,
+        );
+        Ok(EdDSASigShareAdditive(share))
     }
 }

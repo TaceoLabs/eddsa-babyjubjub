@@ -9,7 +9,10 @@ use crate::{
         blame::{BlameResult, BlameRevelation, BlameVerdict},
         finished::Finished,
     },
-    reshare::{receiver::ReShareProtocolReceiver, sender_set::ReShareSenderSet},
+    reshare::{
+        receiver::{ReShareProtocolReceiver, ReceivedShares},
+        sender_set::ReShareSenderSet,
+    },
     shamir::utils,
 };
 use ark_ec::CurveGroup;
@@ -21,10 +24,11 @@ use uuid::Uuid;
 /// Receiver-side state for the optional resharing blame round.
 pub struct ReShareBlameRound<C: CurveGroup> {
     my_idx: u16,
-    received_shares: HashMap<u16, (C::ScalarField, Vec<C::Affine>)>,
+    received_shares: ReceivedShares<C>,
     reshare_senders: ReShareSenderSet<C>,
     session_id: Uuid,
     verdicts: BTreeMap<u16, BlameVerdict>,
+    excluded_verdict_parties: BTreeSet<u16>,
     resolved_senders: BTreeSet<u16>,
     disqualified_senders: BTreeSet<u16>,
 }
@@ -47,8 +51,9 @@ impl<C: CurveGroup> ReShareBlameRound<C> {
             reshare_senders: receiver.reshare_senders,
             session_id: receiver.session_id,
             verdicts,
+            excluded_verdict_parties: BTreeSet::new(),
             resolved_senders: BTreeSet::new(),
-            disqualified_senders: BTreeSet::new(),
+            disqualified_senders: receiver.pre_disqualified_senders,
         })
     }
 
@@ -73,6 +78,9 @@ impl<C: CurveGroup> ReShareBlameRound<C> {
         if from == self.my_idx {
             eyre::bail!("do not add own verdict");
         }
+        if self.excluded_verdict_parties.contains(&from) {
+            eyre::bail!("new party {from}'s missing verdict was already excluded");
+        }
         if self.verdicts.contains_key(&from) {
             eyre::bail!("already added verdict from new party {from}");
         }
@@ -95,13 +103,47 @@ impl<C: CurveGroup> ReShareBlameRound<C> {
     pub fn missing_verdicts(&self) -> Vec<u16> {
         (1..=self.reshare_senders.new_parameters.number_of_parties)
             .filter(|party| !self.verdicts.contains_key(party))
+            .filter(|party| !self.excluded_verdict_parties.contains(party))
             .collect()
     }
 
     /// Whether every party's `Ok` or blame-set broadcast has been received.
     #[must_use]
     pub fn verdicts_complete(&self) -> bool {
-        self.verdicts.len() == usize::from(self.reshare_senders.new_parameters.number_of_parties)
+        self.missing_verdicts().is_empty()
+    }
+
+    /// Exclude a new party whose blame verdict was missing or rejected.
+    ///
+    /// This only removes the party from the blame-verdict barrier so the remaining receivers can
+    /// finish. It does not revoke a reshared secret-key share the party may already possess.
+    /// Every honest receiver that continues must apply the same externally agreed exclusion.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid or local party, a party whose verdict was accepted, or a
+    /// party that was already excluded. It also returns an error if exclusion would leave fewer
+    /// than the new sharing's threshold receivers.
+    pub fn exclude_missing_verdict(&mut self, party: u16) -> Result<()> {
+        if party == 0 || party > self.reshare_senders.new_parameters.number_of_parties {
+            eyre::bail!("invalid new party for verdict exclusion: {party}");
+        }
+        if party == self.my_idx {
+            eyre::bail!("cannot exclude the local party's own verdict");
+        }
+        if self.verdicts.contains_key(&party) {
+            eyre::bail!("new party {party}'s verdict was already accepted");
+        }
+        if self.excluded_verdict_parties.contains(&party) {
+            eyre::bail!("new party {party}'s verdict was already excluded");
+        }
+        let remaining = usize::from(self.reshare_senders.new_parameters.number_of_parties)
+            - self.excluded_verdict_parties.len()
+            - 1;
+        if remaining < usize::from(self.reshare_senders.new_parameters.threshold) {
+            eyre::bail!("verdict exclusion would leave fewer than the threshold receivers");
+        }
+        self.excluded_verdict_parties.insert(party);
+        Ok(())
     }
 
     /// Map every accused old sender to the new parties accusing it.
@@ -162,6 +204,8 @@ impl<C: CurveGroup> ReShareBlameRound<C> {
                 .find(|share| share.receiver == self.my_idx)
                 && let Some(received) = self.received_shares.get_mut(&from)
             {
+                use zeroize::Zeroize as _;
+                received.0.zeroize();
                 received.0 = share.share;
             }
         } else {
@@ -210,6 +254,12 @@ impl<C: CurveGroup> ReShareBlameRound<C> {
         }
         if !self.missing_revelations()?.is_empty() {
             eyre::bail!("cannot finalize before all accusations are resolved");
+        }
+        let completing_receivers =
+            usize::from(self.reshare_senders.new_parameters.number_of_parties)
+                - self.excluded_verdict_parties.len();
+        if completing_receivers < usize::from(self.reshare_senders.new_parameters.threshold) {
+            eyre::bail!("fewer than the threshold receivers remain in the blame round");
         }
         let qualified = self
             .reshare_senders
@@ -265,6 +315,7 @@ impl<C: CurveGroup> ReShareBlameRound<C> {
                 pk: self.reshare_senders.pk,
             },
             disqualified_parties: self.disqualified_senders.into_iter().collect(),
+            excluded_verdict_parties: self.excluded_verdict_parties.into_iter().collect(),
         })
     }
 

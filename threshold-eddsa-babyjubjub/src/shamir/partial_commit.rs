@@ -14,3 +14,11 @@ use serde::{Deserialize, Serialize};
 #[repr(transparent)]
 #[serde(transparent)]
 pub struct PartialEdDSACommitmentsShamir(pub(crate) PartialEdDSACommitments);
+
+impl PartialEdDSACommitmentsShamir {
+    /// Return the party ID carried by this commitment.
+    #[must_use]
+    pub fn party_id(&self) -> u16 {
+        self.0.party_id()
+    }
+}

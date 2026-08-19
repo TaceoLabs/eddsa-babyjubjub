@@ -12,8 +12,11 @@ pub mod schnorr;
 pub mod test;
 
 use ark_ff::PrimeField;
-use serde::{Deserialize, Serialize};
-use std::ops::{Deref, DerefMut};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use std::{
+    collections::HashMap,
+    ops::{Deref, DerefMut},
+};
 use zeroize::Zeroize;
 
 pub(crate) struct SecretScalars<F: PrimeField>(pub(crate) Vec<F>);
@@ -38,11 +41,66 @@ impl<F: PrimeField> Drop for SecretScalars<F> {
     }
 }
 
+pub(crate) struct SecretScalarMap<F: PrimeField>(pub(crate) HashMap<u16, F>);
+
+impl<F: PrimeField> Deref for SecretScalarMap<F> {
+    type Target = HashMap<u16, F>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<F: PrimeField> DerefMut for SecretScalarMap<F> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<F: PrimeField> Drop for SecretScalarMap<F> {
+    #[allow(
+        clippy::iter_over_hash_type,
+        reason = "zeroization order has no semantic effect"
+    )]
+    fn drop(&mut self) {
+        for value in self.0.values_mut() {
+            value.zeroize();
+        }
+    }
+}
+
 /// The parameters of a DKG protocol run, which must be the same for all participating parties.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Parameters {
     pub(crate) number_of_parties: u16,
     pub(crate) threshold: u16,
+}
+
+impl<'de> Deserialize<'de> for Parameters {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Repr {
+            number_of_parties: u16,
+            threshold: u16,
+        }
+
+        let repr = Repr::deserialize(deserializer)?;
+        if repr.number_of_parties == 0 {
+            return Err(D::Error::custom("number of parties must be non-zero"));
+        }
+        if repr.threshold == 0 || repr.threshold > repr.number_of_parties {
+            return Err(D::Error::custom(
+                "threshold must be non-zero and not exceed the number of parties",
+            ));
+        }
+        Ok(Self {
+            number_of_parties: repr.number_of_parties,
+            threshold: repr.threshold,
+        })
+    }
 }
 
 impl Parameters {

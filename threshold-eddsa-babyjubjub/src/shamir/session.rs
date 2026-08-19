@@ -30,18 +30,27 @@ pub struct EdDSASessionShamir(EdDSASession);
 impl EdDSASessionShamir {
     /// Computes commitments to two random values `d_share` and `e_share`, which will be the shares of the randomness used in the `EdDSA` signature.
     /// The result is meant to be sent to one accumulating party (i.e., the aggregator) who combines all the shares of all parties and creates the challenge hash.
-    pub fn pre_round(rng: &mut (impl CryptoRng + Rng)) -> (Self, PartialEdDSACommitmentsShamir) {
-        let (session, comm) = EdDSASession::pre_round(rng);
-        (Self(session), PartialEdDSACommitmentsShamir(comm))
+    ///
+    /// # Errors
+    /// Returns an error if `party_id` is zero.
+    pub fn pre_round(
+        party_id: u16,
+        rng: &mut (impl CryptoRng + Rng),
+    ) -> eyre::Result<(Self, PartialEdDSACommitmentsShamir)> {
+        let (session, comm) = EdDSASession::pre_round(party_id, rng)?;
+        Ok((Self(session), PartialEdDSACommitmentsShamir(comm)))
     }
 
     /// Finalizes a signature share for a given challenge hash and session.
     /// The session and information therein is consumed to prevent reuse of the randomness.
     ///
-    /// Prerequisites:
-    /// * The `lagrange_coefficient` is computed from the same set of contributing parties as in the commitments.
-    /// * The set of contributing parties in `challenge_input` is checked for duplicates, has the correct number of parties and contains the party corresponding to this session.
-    #[must_use]
+    /// The Lagrange coefficient is derived internally from the identity-bound key share and the
+    /// canonical contributing set.
+    ///
+    /// # Errors
+    /// Returns an error if the key-share metadata is invalid, the signing set is non-canonical,
+    /// outside the key's committee, or smaller than its threshold, or the nonce session, key share,
+    /// and signing set do not identify the same party.
     pub fn sign_round(
         self,
         session_id: Uuid,
@@ -49,8 +58,33 @@ impl EdDSASessionShamir {
         message: BaseField,
         public_key: &EdDSAPublicKey,
         EdDSACommitmentsShamir(challenge_input): EdDSACommitmentsShamir,
-        lagrange_coefficient: ScalarField,
-    ) -> EdDSASigShareShamir {
+    ) -> eyre::Result<EdDSASigShareShamir> {
+        let parties = &challenge_input.contributing_parties;
+        crate::commit::EdDSACommitments::validate_party_ids(parties)?;
+        if x_share.party_id == 0
+            || x_share.number_of_parties == 0
+            || x_share.party_id > x_share.number_of_parties
+            || x_share.threshold == 0
+            || x_share.threshold > x_share.number_of_parties
+        {
+            eyre::bail!("invalid Shamir key-share metadata");
+        }
+        if parties.last().copied().unwrap_or_default() > x_share.number_of_parties {
+            eyre::bail!("signing set contains a party outside the key's committee");
+        }
+        if parties.len() < usize::from(x_share.threshold) {
+            eyre::bail!("signing set is smaller than the threshold bound to the key share");
+        }
+        if self.0.party_id != x_share.party_id {
+            eyre::bail!("nonce session and key share belong to different parties");
+        }
+        if parties.binary_search(&x_share.party_id).is_err() {
+            eyre::bail!("signing set does not contain this party");
+        }
+        let lagrange_coefficient = crate::shamir::utils::single_lagrange_from_coeff::<ScalarField, _>(
+            x_share.party_id,
+            parties,
+        );
         // Recombine the two-nonce randomness shares into the full randomness used in the challenge.
         let (r, b) = crate::nonce::combine_two_nonce_randomness(CombineTwoNonceRandomnessArgs {
             session_id,
@@ -66,7 +100,10 @@ impl EdDSASessionShamir {
 
         // The following modular reduction in convert_base_to_scalar is required in rust to perform the scalar multiplications. Using all 254 bits of the base field in a double/add ladder would apply this reduction implicitly. We show in the docs of convert_base_to_scalar why this does not introduce a bias when applied to a uniform element of the base field.
         let c_ = eddsa_babyjubjub::convert_base_to_scalar(c);
-        let share = EdDSASigShare(self.0.d + b * self.0.e + lagrange_coefficient * c_ * x_share.0);
-        EdDSASigShareShamir(share)
+        let share = EdDSASigShare(
+            x_share.party_id,
+            self.0.d + b * self.0.e + lagrange_coefficient * c_ * x_share.value,
+        );
+        Ok(EdDSASigShareShamir(share))
     }
 }

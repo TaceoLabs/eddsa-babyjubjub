@@ -67,7 +67,7 @@ only by an unauthenticated transport.
 | Reshare polynomial commitments and proof of possession | **Reliable broadcast from each selected old sender to every new party** | A sender must not equivocate about the polynomial against which private evaluations are checked. |
 | Reshare polynomial evaluations | **Private, authenticated point-to-point channel** | Each new party receives a different secret evaluation. |
 | Reshare complaint verdicts and old-sender revelations | **Reliable broadcast to every new party** | Every new party must derive the same surviving sender set and public output. |
-| Missing-revelation timeout decisions | **Externally coordinated agreement** | Every honest participant must disqualify the same missing dealer or sender. |
+| Missing-message, verdict, and revelation timeout decisions | **Externally coordinated agreement** | Every honest participant must apply the same disqualification or verdict-exclusion set. |
 
 Reliable broadcast means more than best-effort multicast. In particular, if one
 honest participant accepts a broadcast from a sender, all honest participants
@@ -80,11 +80,13 @@ point-to-point copies.
 The primary API is in the `shamir` module:
 
 - `EdDSASessionShamir::pre_round` samples two secret, single-use nonces and
-  returns their public `PartialEdDSACommitmentsShamir`.
-- The aggregator selects a canonically ordered signing set of at least the
-  threshold size and calls `EdDSACommitmentsShamir::pre_agg`.
-- Each selected party computes its Lagrange coefficient for exactly that set
-  and consumes its session with `EdDSASessionShamir::sign_round`.
+  returns their public, identity-bound `PartialEdDSACommitmentsShamir`.
+- The aggregator selects a signing set of at least the threshold size and calls
+  `EdDSACommitmentsShamir::pre_agg`; aggregation canonicalizes the party order
+  and rejects empty or duplicate sets.
+- Each selected party consumes its session with
+  `EdDSASessionShamir::sign_round`. The signer validates its identity and
+  committee metadata and derives its Lagrange coefficient internally.
 - The aggregator calls `sign_agg` or, when public-key shares and individual
   commitments are available, `sign_agg_with_identifiable_abort`.
 
@@ -100,8 +102,10 @@ signers                         aggregator
    |                                `--> ordinary EdDSA signature
 ```
 
-The signer order must match across party IDs, signature shares, public-key
-shares, and individual nonce commitments. Prefer
+Commitments and signature shares carry party IDs, and public-key shares used
+for identifiable abort are supplied in a `BTreeMap<u16, Affine>`. The map must
+come from authenticated, immutable DKG or reshare output; the type system cannot
+authenticate application-provided public-key metadata. Prefer
 `sign_agg_with_identifiable_abort` when an invalid share must be attributed;
 plain `sign_agg` only combines shares and may therefore return a signature that
 does not verify if a participant supplied a malformed share.
@@ -122,7 +126,11 @@ degree is `t - 1`; any `t` resulting shares can sign.
 1. Every party creates `keygen::round1::RoundOne` with identical parameters and
    session ID. It reliably broadcasts `get_broadcast_message()`, containing its
    coefficient commitments and Schnorr proof of possession. Every other party
-   passes that same broadcast to `add_party_communication`.
+   passes that same broadcast to `add_party_communication`. A missing or
+   malformed round-one dealer can be excluded with `disqualify_party`, but only
+   after all honest parties agree on that decision. For duplicate constant
+   commitments, apply both reported IDs atomically with `disqualify_parties`;
+   this removes broadcasts accepted before the duplicate was discovered.
 2. After `can_advance()` succeeds, `round2()` creates one secret polynomial
    evaluation per recipient. Deliver each `get_party_communication(recipient)`
    privately and authentically, and process it with `add_party_communication`.
@@ -137,6 +145,16 @@ its `revelation()`. Missing revelations may be resolved with
 `disqualify_missing_dealer`, but only after an externally agreed deadline that
 all honest parties apply identically. `BlameRound::finalize` excludes
 disqualified dealers and reports their IDs.
+
+If a selected dealer's private round-two evaluation never arrives, call
+`complain_missing_party` after an externally agreed delivery deadline, then
+enter the blame round. The dealer can reveal the committed evaluation publicly
+or be disqualified under the same coordinated rule.
+
+If a qualified dealer withholds or sends an invalid blame verdict, the remaining
+parties can apply `disqualify_missing_verdict` after a common timeout. Its
+polynomial is removed from the DKG output. Disqualification fails—and the run
+must abort—if fewer than the configured threshold parties would remain.
 
 The direct `add_party_communication` path reports a malformed private share as
 an error and is suitable when the caller will abort the whole run. Use the blame
@@ -169,6 +187,18 @@ decision. Finalization recomputes Lagrange coefficients over the surviving old
 senders, requires at least the old threshold to remain, and checks that their
 constant commitments still reconstruct the original public key.
 
+When a valid sender broadcast arrives but its private evaluation does not, use
+`complain_missing_share` to enter blame and request a public revelation. When
+no usable broadcast arrives, `disqualify_missing_sender` may exclude that sender
+before blame, provided the remaining selected senders still reconstruct the old
+key.
+
+If a new receiver withholds or sends an invalid blame verdict, the completing
+receivers can apply `exclude_missing_verdict` after a common timeout. This only
+removes the receiver from the blame barrier and does not revoke a secret share
+it may already possess. At least the new threshold number of receivers must
+remain. The exclusion is reported in `BlameResult::excluded_verdict_parties`.
+
 Do not let each receiver choose its own sender set or independently decide which
 senders timed out. Doing so can create divergent shares and public-key-share
 metadata even when every local cryptographic check succeeds.
@@ -177,8 +207,9 @@ metadata even when every local cryptographic check succeeds.
 
 DKG and reshare return `keygen::finished::Finished<C>`. For Baby Jubjub, use
 `ark_babyjubjub::EdwardsProjective` as `C`. Its `sk_share` can be converted into
-`shamir::secret::DLogShareShamir` for signing; `pk` and `pk_shares` supply the
-public values required for verification and identifiable abort.
+`shamir::secret::DLogShareShamir` for signing by binding the share to its party
+ID, total party count, and threshold; `pk` and `pk_shares` supply the public
+values required for verification and identifiable abort.
 
 The final threshold signature is an
 `eddsa_babyjubjub::EdDSASignature` and is verified exactly like a regular

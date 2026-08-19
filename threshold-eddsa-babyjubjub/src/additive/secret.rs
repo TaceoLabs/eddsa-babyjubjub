@@ -15,17 +15,32 @@ use zeroize::ZeroizeOnDrop;
 /// Not `Debug`/`Display` to avoid accidental leaks.
 ///
 #[derive(Serialize, Deserialize, ZeroizeOnDrop, CanonicalSerialize, CanonicalDeserialize)]
-#[serde(transparent)]
-pub struct DLogShareAdditive(#[serde(with = "ark_serde_compat::field")] pub(crate) ScalarField);
-
-impl From<ark_babyjubjub::Fr> for DLogShareAdditive {
-    fn from(value: ark_babyjubjub::Fr) -> Self {
-        Self(value)
-    }
+pub struct DLogShareAdditive {
+    #[serde(with = "ark_serde_compat::field")]
+    pub(crate) value: ScalarField,
+    pub(crate) party_id: u16,
+    pub(crate) number_of_parties: u16,
 }
 
-impl From<DLogShareAdditive> for ark_babyjubjub::Fr {
-    fn from(value: DLogShareAdditive) -> Self {
-        value.0
+impl DLogShareAdditive {
+    /// Bind an additive scalar share to its identity and complete party count.
+    ///
+    /// # Errors
+    /// Returns an error unless `1 <= party_id <= number_of_parties`.
+    pub fn new(value: ScalarField, party_id: u16, number_of_parties: u16) -> eyre::Result<Self> {
+        if party_id == 0 || number_of_parties == 0 || party_id > number_of_parties {
+            eyre::bail!("party ID must lie in the non-empty additive party set");
+        }
+        Ok(Self {
+            value,
+            party_id,
+            number_of_parties,
+        })
+    }
+
+    /// Return the identity bound to this share.
+    #[must_use]
+    pub fn party_id(&self) -> u16 {
+        self.party_id
     }
 }

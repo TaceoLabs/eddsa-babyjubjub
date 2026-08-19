@@ -21,10 +21,18 @@ use serde::{Deserialize, Serialize};
 /// Each party sends these commitments, which consist of a split of the actual response and nonce splits, for aggregation and creation of the global challenge hash.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartialEdDSACommitments {
+    /// The claimed ID of the party that created this commitment.
+    pub(crate) party_id: u16,
     #[serde(with = "babyjubjub::affine")]
     /// The share of G*d, the first part of the two-nonce commitment to the randomness r = d + e*b
     pub(crate) d: Affine,
     #[serde(with = "babyjubjub::affine")]
     /// The share of G*e, the second part of the two-nonce commitment to the randomness r = d + e*b
     pub(crate) e: Affine,
+}
+
+impl PartialEdDSACommitments {
+    pub(crate) fn party_id(&self) -> u16 {
+        self.party_id
+    }
 }

@@ -14,6 +14,7 @@ use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::UniformRand;
 use eddsa_babyjubjub::EdDSAPublicKey;
 use rand::{CryptoRng, Rng, seq::IteratorRandom};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 fn share<R: Rng>(
@@ -30,7 +31,15 @@ fn share<R: Rng>(
     }
     for i in 1..=num_shares {
         let share = evaluate_poly(&coeffs, ScalarField::from(i as u64));
-        shares.push(DLogShareShamir(share));
+        shares.push(
+            DLogShareShamir::new(
+                share,
+                u16::try_from(i).expect("party ID fits"),
+                u16::try_from(num_shares).expect("party count fits"),
+                u16::try_from(degree + 1).expect("threshold fits"),
+            )
+            .expect("valid share metadata"),
+        );
     }
     shares
 }
@@ -57,8 +66,8 @@ pub(crate) fn test_threshold_eddsa_inner<R: Rng + CryptoRng>(
     // 1) Aggregator requests commitments from all servers
     let mut sessions = Vec::with_capacity(num_parties);
     let mut commitments = Vec::with_capacity(num_parties);
-    for _ in 0..num_parties {
-        let (session, comm) = EdDSASessionShamir::pre_round(rng);
+    for party_id in 1..=u16::try_from(num_parties).expect("party count fits") {
+        let (session, comm) = EdDSASessionShamir::pre_round(party_id, rng).expect("valid party ID");
         sessions.push(Some(session));
         commitments.push(comm);
     }
@@ -70,7 +79,8 @@ pub(crate) fn test_threshold_eddsa_inner<R: Rng + CryptoRng>(
         .map(|&i| commitments[i as usize - 1].clone())
         .collect::<Vec<_>>();
 
-    let challenge = EdDSACommitmentsShamir::pre_agg(&used_commitments, used_parties.clone());
+    let challenge = EdDSACommitmentsShamir::pre_agg(&used_commitments)
+        .expect("valid identity-bound commitments");
 
     // 3) Aggregator challenges used used parties
     let mut used_sigs = Vec::with_capacity(num_parties);
@@ -81,33 +91,27 @@ pub(crate) fn test_threshold_eddsa_inner<R: Rng + CryptoRng>(
             .take()
             .expect("have not used this session before");
         let x_ = &x_shares[*server_idx as usize - 1];
-        let lagrange = utils::single_lagrange_from_coeff(*server_idx, &used_parties);
-        let proof = session.sign_round(
-            session_id,
-            x_,
-            message,
-            public_key,
-            challenge.clone(),
-            lagrange,
-        );
+        let proof = session
+            .sign_round(session_id, x_, message, public_key, challenge.clone())
+            .expect("valid signing package");
         used_sigs.push(proof);
     }
 
     for &position in cheating_positions {
-        used_sigs[position].0.0 += ScalarField::from(1_u64);
+        used_sigs[position].0.1 += ScalarField::from(1_u64);
     }
 
     // 4) Aggregator combines received signature shares
     let used_public_key_shares = used_parties
         .iter()
-        .map(|&party_id| public_key_shares[usize::from(party_id) - 1])
-        .collect::<Vec<_>>();
+        .map(|&party_id| (party_id, public_key_shares[usize::from(party_id) - 1]))
+        .collect::<BTreeMap<_, _>>();
 
     // Without identifiable abort
-    let signature_noabort =
-        challenge
-            .clone()
-            .sign_agg(session_id, &used_sigs, message, public_key.clone());
+    let signature_noabort = challenge
+        .clone()
+        .sign_agg(session_id, &used_sigs, message, public_key.clone())
+        .expect("signature shares match the signing set");
 
     // With identifiable abort
     let result = challenge.sign_agg_with_identifiable_abort(
@@ -124,12 +128,19 @@ pub(crate) fn test_threshold_eddsa_inner<R: Rng + CryptoRng>(
         assert!(public_key.verify(message, &signature));
         assert!(public_key.verify(message, &signature_noabort));
     } else {
-        let expected = cheating_positions
+        let mut expected = cheating_positions
             .iter()
             .map(|&position| usize::from(used_parties[position]))
             .collect::<Vec<_>>();
+        expected.sort_unstable();
         match result {
-            Err(error) => assert_eq!(error.into_inner(), expected),
+            Err(error) => assert_eq!(
+                error
+                    .downcast::<crate::MaliciousPartiesError>()
+                    .expect("malicious-party error")
+                    .into_inner(),
+                expected,
+            ),
             Ok(_) => panic!("cheating parties must be identified"),
         }
         assert!(!public_key.verify(message, &signature_noabort));
@@ -147,7 +158,7 @@ fn test_threshold_eddsa(num_parties: usize, degree: usize, cheating_positions: &
     let public_key = (Affine::generator() * x).into_affine();
     let public_key_shares = x_shares
         .iter()
-        .map(|x| Affine::generator() * x.0)
+        .map(|x| Affine::generator() * x.value)
         .collect::<Vec<_>>();
     let public_key_ =
         utils::test_utils::reconstruct_random_pointshares(&public_key_shares, degree, &mut rng);
@@ -184,4 +195,56 @@ fn test_threshold_eddsa_shamir_31_15() {
 #[test]
 fn test_threshold_eddsa_shamir_identifies_cheating_parties() {
     test_threshold_eddsa(7, 3, &[0, 2]);
+}
+
+#[test]
+fn aggregate_commitment_deserialization_enforces_party_invariants() {
+    let mut rng = rand::thread_rng();
+    let (_, commitment) = EdDSASessionShamir::pre_round(1, &mut rng).expect("valid party ID");
+    let aggregate =
+        EdDSACommitmentsShamir::pre_agg(&[commitment]).expect("valid aggregate commitment");
+    let mut encoded = serde_json::to_value(aggregate).expect("serialize aggregate commitment");
+    encoded["contributing_parties"] = serde_json::json!([0]);
+    let Err(_) = serde_json::from_value::<EdDSACommitmentsShamir>(encoded) else {
+        panic!("non-canonical commitment parties must be rejected");
+    };
+}
+
+#[test]
+fn signer_rejects_mismatched_identity_and_insufficient_sets() {
+    let mut rng = rand::thread_rng();
+    let message = BaseField::rand(&mut rng);
+    let public_key = EdDSAPublicKey {
+        pk: (Affine::generator() * ScalarField::rand(&mut rng)).into_affine(),
+    };
+
+    let (session, commitment) = EdDSASessionShamir::pre_round(1, &mut rng).expect("valid party ID");
+    let aggregate =
+        EdDSACommitmentsShamir::pre_agg(&[commitment]).expect("valid single-party commitment set");
+    let other_party_share = DLogShareShamir::new(ScalarField::rand(&mut rng), 2, 2, 1)
+        .expect("valid metadata for another party");
+    let Err(_) = session.sign_round(
+        Uuid::new_v4(),
+        &other_party_share,
+        message,
+        &public_key,
+        aggregate,
+    ) else {
+        panic!("a nonce session must not sign for another key-share identity");
+    };
+
+    let (session, commitment) = EdDSASessionShamir::pre_round(1, &mut rng).expect("valid party ID");
+    let aggregate =
+        EdDSACommitmentsShamir::pre_agg(&[commitment]).expect("valid single-party commitment set");
+    let two_party_threshold_share = DLogShareShamir::new(ScalarField::rand(&mut rng), 1, 2, 2)
+        .expect("valid two-party threshold metadata");
+    let Err(_) = session.sign_round(
+        Uuid::new_v4(),
+        &two_party_threshold_share,
+        message,
+        &public_key,
+        aggregate,
+    ) else {
+        panic!("a signer must reject a set below its bound threshold");
+    };
 }

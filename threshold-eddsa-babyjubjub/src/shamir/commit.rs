@@ -17,6 +17,7 @@ use ark_serialize::Valid;
 use eddsa_babyjubjub::{EdDSAPublicKey, EdDSASignature};
 use itertools::izip;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 /// Commitment aggregation object for the Shamir `EdDSA` protocol.
@@ -31,21 +32,20 @@ pub struct EdDSACommitmentsShamir(pub(crate) EdDSACommitments);
 impl EdDSACommitmentsShamir {
     /// Create an aggregated commitment object from component affine points and party IDs.
     ///
-    /// # Panics
-    /// Panics if a commitment is invalid, or if party IDs are empty, zero, or duplicated.
-    #[must_use]
-    pub fn new(d: Affine, e: Affine, parties: Vec<u16>) -> Self {
-        assert!(
-            d.check().is_ok() && e.check().is_ok(),
-            "commitments must be valid subgroup points"
-        );
-        EdDSACommitments::validate_party_ids(&parties);
+    /// # Errors
+    /// Returns an error if a commitment is invalid, or if party IDs are empty, zero, duplicated,
+    /// or not canonically ordered.
+    pub fn new(d: Affine, e: Affine, parties: Vec<u16>) -> eyre::Result<Self> {
+        if d.check().is_err() || e.check().is_err() {
+            eyre::bail!("commitments must be valid subgroup points");
+        }
+        EdDSACommitments::validate_party_ids(&parties)?;
         let commitments = EdDSACommitments {
             d,
             e,
             contributing_parties: parties,
         };
-        Self(commitments)
+        Ok(Self(commitments))
     }
 
     /// Returns the parties that contributed to this commitment.
@@ -56,65 +56,61 @@ impl EdDSACommitmentsShamir {
 
     /// Combine all parties' signature shares into a single `EdDSA` signature object.
     ///
-    /// Must use the same order of contributing parties as in aggregation
+    /// Signature shares are matched to the contributing set by their embedded party IDs.
     ///
-    /// # Panics
-    /// Panics unless exactly one signature share is supplied per contributing party.
-    #[must_use]
+    /// # Errors
+    /// Returns an error unless exactly one signature share is supplied for each contributing
+    /// party.
     pub fn sign_agg(
         self,
         session_id: Uuid,
         shares: &[EdDSASigShareShamir],
         message: BaseField,
         public_key: EdDSAPublicKey,
-    ) -> EdDSASignature {
-        assert_eq!(
-            shares.len(),
-            self.0.contributing_parties.len(),
-            "one share is required per contributing party"
-        );
-        self.0
-            .sign_agg(session_id, shares.iter().map(|x| &x.0), message, public_key)
+    ) -> eyre::Result<EdDSASignature> {
+        let shares = self.ordered_shares(shares)?;
+        Ok(self.0.sign_agg(
+            session_id,
+            shares.into_iter().map(|share| &share.0),
+            message,
+            public_key,
+        ))
     }
 
     /// Combine all parties' signature shares into a single `EdDSA` signature object, verifying
     /// each party's contribution individually so that malformed shares can be attributed.
     ///
-    /// The order of `shares`, `commitments`, and `x_share_commitments` must match
-    /// `contributing_parties`. Lagrange coefficients are derived internally.
+    /// Signature shares and nonce commitments carry party IDs. Public-key shares are keyed by ID.
+    /// Lagrange coefficients are derived internally.
     ///
     /// # Errors
     /// Returns a [`MaliciousPartiesError`] with the IDs of all parties whose signature share does
     /// not verify against their commitment and their Lagrange-weighted share of the public key.
     ///
-    /// # Panics
-    /// Panics if the supplied vectors do not match the validated contributing-party set, or if
-    /// their individual public values do not reconstruct the stored aggregates.
     pub fn sign_agg_with_identifiable_abort(
         self,
         session_id: Uuid,
         shares: &[EdDSASigShareShamir],
         message: BaseField,
         public_key: &EdDSAPublicKey,
-        x_share_commitments: &[Affine],
+        x_share_commitments: &BTreeMap<u16, Affine>,
         commitments: &[PartialEdDSACommitmentsShamir],
-    ) -> Result<EdDSASignature, MaliciousPartiesError> {
-        assert_eq!(
-            shares.len(),
-            x_share_commitments.len(),
-            "Shares and commitments must match"
-        );
-        assert_eq!(
-            shares.len(),
-            commitments.len(),
-            "Shares and commitments must match"
-        );
-        assert_eq!(
-            shares.len(),
-            self.0.contributing_parties.len(),
-            "one share is required per contributing party"
-        );
-        EdDSACommitments::validate_party_ids(&self.0.contributing_parties);
+    ) -> eyre::Result<EdDSASignature> {
+        EdDSACommitments::validate_party_ids(&self.0.contributing_parties)?;
+        let shares = self.ordered_shares(shares)?;
+        let commitment_by_party = commitments
+            .iter()
+            .map(|commitment| (commitment.party_id(), commitment))
+            .collect::<BTreeMap<_, _>>();
+        if commitment_by_party.len() != commitments.len()
+            || commitment_by_party.keys().copied().collect::<Vec<_>>()
+                != self.0.contributing_parties
+        {
+            eyre::bail!("nonce commitments do not match the contributing party set");
+        }
+        if x_share_commitments.keys().copied().collect::<Vec<_>>() != self.0.contributing_parties {
+            eyre::bail!("public-key shares do not match the contributing party set");
+        }
         let lagrange_coefficients = self
             .0
             .contributing_parties
@@ -126,31 +122,22 @@ impl EdDSACommitmentsShamir {
                 )
             })
             .collect::<Vec<_>>();
-        let (individual_d, individual_e) = commitments.iter().fold(
+        let (individual_d, individual_e) = commitment_by_party.values().fold(
             (Projective::zero(), Projective::zero()),
             |(d, e), commitment| (d + commitment.0.d, e + commitment.0.e),
         );
-        assert_eq!(
-            individual_d.into_affine(),
-            self.0.d,
-            "individual and aggregate d commitments differ"
-        );
-        assert_eq!(
-            individual_e.into_affine(),
-            self.0.e,
-            "individual and aggregate e commitments differ"
-        );
+        if individual_d.into_affine() != self.0.d || individual_e.into_affine() != self.0.e {
+            eyre::bail!("individual and aggregate nonce commitments differ");
+        }
         let reconstructed_pk = x_share_commitments
-            .iter()
+            .values()
             .zip(&lagrange_coefficients)
             .fold(Projective::zero(), |acc, (point, lambda)| {
                 acc + *point * lambda
             });
-        assert_eq!(
-            reconstructed_pk.into_affine(),
-            public_key.pk,
-            "public-key shares do not reconstruct the public key"
-        );
+        if reconstructed_pk.into_affine() != public_key.pk {
+            eyre::bail!("public-key shares do not reconstruct the public key");
+        }
 
         let (r, b) = crate::nonce::combine_two_nonce_randomness(CombineTwoNonceRandomnessArgs {
             session_id,
@@ -170,14 +157,14 @@ impl EdDSACommitmentsShamir {
         // For identifiable abort, we check the contribution of all parties
         let mut cheating_parties = Vec::new();
         for (id, (share, x_share_commitment, commitment, lagrange)) in izip!(
-            shares,
-            x_share_commitments,
-            commitments,
+            &shares,
+            x_share_commitments.values(),
+            commitment_by_party.values(),
             &lagrange_coefficients
         )
         .enumerate()
         {
-            let s = share.0.0;
+            let s = share.0.1;
             let r = commitment.0.d + commitment.0.e * b;
             if !crate::commit::verify_for_identifiable_abort(
                 x_share_commitment,
@@ -190,42 +177,39 @@ impl EdDSACommitmentsShamir {
         }
 
         if !cheating_parties.is_empty() {
-            return Err(MaliciousPartiesError(cheating_parties));
+            eyre::bail!(MaliciousPartiesError(cheating_parties));
         }
 
         // Finally assemble the signature
         let mut s = ScalarField::zero();
         for share in shares {
-            s += share.0.0;
+            s += share.0.1;
         }
 
         let sig = EdDSASignature { r, s };
         Ok(sig)
     }
 
-    /// The accumulating party (i.e., the aggregatir) combines the shares of `d + 1` parties.
+    /// The accumulating party combines a threshold-sized set of identity-bound commitments.
     ///
-    /// # Panics
-    /// Panics if the number of commitments does not match the number of contributing parties,
-    /// i.e. `commitments.len() != contributing_parties.len()`.
-    /// Additionally, panics if the contributing parties contain duplicate party IDs.
-    /// The call site is expected to enforce these checks.
-    #[must_use]
-    pub fn pre_agg(
-        commitments: &[PartialEdDSACommitmentsShamir],
-        contributing_parties: Vec<u16>,
-    ) -> Self {
-        EdDSACommitments::validate_party_ids(&contributing_parties);
-        assert_eq!(
-            contributing_parties.len(),
-            commitments.len(),
-            "Number of commitments must match number of contributing parties"
-        );
+    /// # Errors
+    /// Returns an error for an empty set or duplicate/invalid party IDs.
+    pub fn pre_agg(commitments: &[PartialEdDSACommitmentsShamir]) -> eyre::Result<Self> {
+        let input_len = commitments.len();
+        let commitments = commitments
+            .iter()
+            .map(|commitment| (commitment.party_id(), commitment))
+            .collect::<BTreeMap<_, _>>();
+        let contributing_parties = commitments.keys().copied().collect::<Vec<_>>();
+        if commitments.len() != input_len {
+            eyre::bail!("duplicate nonce commitment party ID");
+        }
+        EdDSACommitments::validate_party_ids(&contributing_parties)?;
 
         let mut d = Projective::zero();
         let mut e = Projective::zero();
 
-        for PartialEdDSACommitmentsShamir(comm) in commitments {
+        for PartialEdDSACommitmentsShamir(comm) in commitments.values() {
             d += comm.d;
             e += comm.e;
         }
@@ -239,6 +223,22 @@ impl EdDSACommitmentsShamir {
             contributing_parties,
         };
 
-        EdDSACommitmentsShamir(commitments)
+        Ok(EdDSACommitmentsShamir(commitments))
+    }
+
+    fn ordered_shares<'a>(
+        &self,
+        shares: &'a [EdDSASigShareShamir],
+    ) -> eyre::Result<Vec<&'a EdDSASigShareShamir>> {
+        let shares = shares
+            .iter()
+            .map(|share| (share.party_id(), share))
+            .collect::<BTreeMap<_, _>>();
+        if shares.len() != self.0.contributing_parties.len()
+            || shares.keys().copied().collect::<Vec<_>>() != self.0.contributing_parties
+        {
+            eyre::bail!("signature shares do not match the contributing party set");
+        }
+        Ok(shares.into_values().collect())
     }
 }

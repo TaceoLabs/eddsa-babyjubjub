@@ -12,3 +12,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct EdDSASigShareAdditive(pub(crate) EdDSASigShare);
+
+impl EdDSASigShareAdditive {
+    /// Return the party ID bound into this signature share.
+    #[must_use]
+    pub fn party_id(&self) -> u16 {
+        self.0.0
+    }
+}
