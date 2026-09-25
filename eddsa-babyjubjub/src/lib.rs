@@ -3,7 +3,6 @@
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{AdditiveGroup, BigInteger, PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use num_bigint::BigUint;
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -134,12 +133,10 @@ impl EdDSAPublicKey {
     #[must_use]
     pub fn verify(&self, message: BaseField, signature: &EdDSASignature) -> bool {
         // 1. Reject the signature if s not in [0, L-1]
-        // The following check is required to prevent malleability of the proofs by using different s, such as s + p, if s is given as a BaseField element.
-        // In Rust this check is not required since self.s is a ScalarField element already, but we keep it to have the same implementation as in circom (where it is required).
-        let s_biguint: BigUint = signature.s.into();
-        if s_biguint >= ScalarField::MODULUS.into() {
-            return false;
-        }
+        // This check is required to prevent malleability of the signature by using a different s, such as s + L, if s is given as a BaseField element.
+        // This is the case in circom, where the check must be performed explicitly.
+        // In Rust, however, signature.s is a ScalarField element, so the type system already guarantees that s is canonical, i.e., in [0, L-1], and no explicit check is needed.
+        // All deserialization routines need to ensure that only canonical field elements are accepted.
 
         // 2. Reject the signature if the public key A is one of 8 small order points.
         // The following checks are sufficient for this, but it could be simplified by just checking against the 8 small order points.
