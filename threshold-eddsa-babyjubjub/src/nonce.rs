@@ -54,25 +54,19 @@ pub(crate) fn combine_two_nonce_randomness(
     for party in parties {
         hasher.update(&party.get().to_be_bytes());
     }
-    let mut buf = Vec::with_capacity(d.compressed_size());
-
-    // serialize an Affine point in canonical compressed form
-    let mut serialize_point = |point: &Affine| {
-        point
-            .serialize_compressed(&mut buf)
-            .expect("can serialize point into a vec");
-        hasher.update(&buf);
-        buf.clear();
-    };
-    serialize_point(&public_key.pk);
-    serialize_point(&d);
-    serialize_point(&e);
-
-    let mut buf = Vec::with_capacity(message.compressed_size());
+    // serialize the Affine points and the message in canonical compressed form, writing
+    // directly into the hasher
+    public_key
+        .pk
+        .serialize_compressed(&mut hasher)
+        .expect("can serialize point into the hasher");
+    d.serialize_compressed(&mut hasher)
+        .expect("can serialize point into the hasher");
+    e.serialize_compressed(&mut hasher)
+        .expect("can serialize point into the hasher");
     message
-        .serialize_compressed(&mut buf)
-        .expect("can serialize field into a vec");
-    hasher.update(&buf);
+        .serialize_compressed(&mut hasher)
+        .expect("can serialize field into the hasher");
 
     let mut hash_output = hasher.finalize_xof();
 
