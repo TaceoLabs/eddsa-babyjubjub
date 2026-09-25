@@ -86,6 +86,15 @@ Party IDs, the committee size, and the signing threshold are `NonZeroU16`
 values, so a zero ID is unrepresentable and rejected already during
 deserialization.
 
+We recommend limiting the total committee size `n` to **128 participants**,
+following the [FROST3 signing draft (BIP 445)](https://github.com/siv2r/bip-frost-signing#footnotes),
+which adopts this bound to address adaptive-corruption concerns related to the
+Low-Dimensional Vector Representation (LDVR) problem. This recommendation applies
+to the full committee, including participants not selected for a particular
+signing session, and is not enforced by the API. The draft's security rationale
+is specific to secp256k1; establishing the corresponding adaptive-security
+guarantees for Baby Jubjub requires a separate analysis.
+
 Commitments and signature shares carry party IDs, and public-key shares used
 for identifiable abort are supplied in a `BTreeMap<NonZeroU16, Affine>`. The map must
 come from an authenticated, immutable source; the type system cannot
@@ -103,9 +112,9 @@ was validated and nobody may be accused. Read the attribution with
 
 A `DLogShareShamir` binds its scalar to a party ID, the committee size, the
 threshold, and the public key. Build it with `DLogShareShamir::new`, which
-rejects out-of-range metadata and a small-order public key; deserialization
-enforces the same invariants, so a persisted share cannot be loaded with its
-binding altered.
+rejects zero secret shares, out-of-range metadata, and a small-order public key;
+deserialization enforces the same invariants, so a persisted share cannot be
+loaded with its binding altered.
 
 The final threshold signature is an
 `eddsa_babyjubjub::EdDSASignature` and is verified exactly like a regular
