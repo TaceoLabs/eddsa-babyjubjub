@@ -16,6 +16,7 @@ mod test;
 pub(crate) mod utils;
 
 use ark_ec::{CurveGroup, PrimeGroup};
+use std::num::NonZeroU16;
 
 pub(crate) type Curve = ark_babyjubjub::EdwardsProjective;
 pub(crate) type Affine = <Curve as CurveGroup>::Affine;
@@ -28,18 +29,18 @@ pub(crate) const FROST_3_NONCE_COMBINER_LABEL: &[u8] = b"FROST_3_NONCE_COMBINER"
 /// The IDs of the parties that contributed a malformed signature share.
 #[derive(Debug, thiserror::Error)]
 #[error("Malicious parties detected: {0:?}")]
-pub struct MaliciousPartiesError(Vec<usize>);
+pub struct MaliciousPartiesError(Vec<NonZeroU16>);
 
 impl MaliciousPartiesError {
     /// Consumes the error and returns the IDs of the parties identified as cheating.
     #[must_use]
-    pub fn into_inner(self) -> Vec<usize> {
+    pub fn into_inner(self) -> Vec<NonZeroU16> {
         self.0
     }
 
     /// The IDs of the parties identified as cheating.
     #[must_use]
-    pub fn party_ids(&self) -> &[usize] {
+    pub fn party_ids(&self) -> &[NonZeroU16] {
         &self.0
     }
 }
@@ -67,7 +68,7 @@ impl IdentifiableAbortError {
     /// The IDs of the parties whose signature share failed validation, or `None` when the abort was
     /// caused by inconsistent aggregation input rather than by a malformed share.
     #[must_use]
-    pub fn malicious_parties(&self) -> Option<&[usize]> {
+    pub fn malicious_parties(&self) -> Option<&[NonZeroU16]> {
         match self {
             Self::MaliciousParties(error) => Some(error.party_ids()),
             Self::InvalidInput(_) => None,
@@ -77,7 +78,7 @@ impl IdentifiableAbortError {
     /// Consumes the error and returns the IDs of the parties identified as cheating, or `None` when
     /// the abort was caused by inconsistent aggregation input.
     #[must_use]
-    pub fn into_malicious_parties(self) -> Option<Vec<usize>> {
+    pub fn into_malicious_parties(self) -> Option<Vec<NonZeroU16>> {
         match self {
             Self::MaliciousParties(error) => Some(error.into_inner()),
             Self::InvalidInput(_) => None,

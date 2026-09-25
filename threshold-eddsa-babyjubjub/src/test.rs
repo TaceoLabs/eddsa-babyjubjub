@@ -135,7 +135,7 @@ pub(crate) fn test_threshold_eddsa_inner<R: Rng + CryptoRng>(
     } else {
         let mut expected = cheating_positions
             .iter()
-            .map(|&position| usize::from(used_parties[position].get()))
+            .map(|&position| used_parties[position])
             .collect::<Vec<_>>();
         expected.sort_unstable();
         match result {

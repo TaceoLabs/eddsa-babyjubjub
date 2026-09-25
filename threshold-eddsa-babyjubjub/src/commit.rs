@@ -202,7 +202,7 @@ impl EdDSACommitments {
             let r = commitment.d + commitment.e * b;
             if !verify_for_identifiable_abort(x_share_commitment, r.into_affine(), s, c_ * lagrange)
             {
-                cheating_parties.push(usize::from(self.contributing_parties[id].get()));
+                cheating_parties.push(self.contributing_parties[id]);
             }
         }
 
