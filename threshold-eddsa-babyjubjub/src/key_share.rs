@@ -6,6 +6,7 @@
 
 use crate::{Affine, ScalarField};
 use ark_ec::AffineRepr;
+use ark_ff::Zero;
 use ark_serde_compat::babyjubjub;
 use ark_serialize::Valid;
 use eddsa_babyjubjub::EdDSAPublicKey;
@@ -42,9 +43,9 @@ impl DLogShareShamir {
     /// Bind a scalar share to its party identity, Shamir committee parameters, and public key.
     ///
     /// # Errors
-    /// Returns an error unless the metadata satisfies `party_id <= number_of_parties` and
-    /// `threshold <= number_of_parties`, and `public_key` is a non-zero point in the prime-order
-    /// subgroup.
+    /// Returns an error unless `value` is non-zero, the metadata satisfies
+    /// `party_id <= number_of_parties` and `threshold <= number_of_parties`, and `public_key`
+    /// is a non-zero point in the prime-order subgroup.
     pub fn new(
         value: ScalarField,
         public_key: &EdDSAPublicKey,
@@ -52,7 +53,13 @@ impl DLogShareShamir {
         number_of_parties: NonZeroU16,
         threshold: NonZeroU16,
     ) -> eyre::Result<Self> {
-        Self::validate(&public_key.pk, party_id, number_of_parties, threshold)?;
+        Self::validate(
+            &value,
+            &public_key.pk,
+            party_id,
+            number_of_parties,
+            threshold,
+        )?;
         Ok(Self {
             value,
             public_key: public_key.pk,
@@ -63,11 +70,15 @@ impl DLogShareShamir {
     }
 
     fn validate(
+        value: &ScalarField,
         public_key: &Affine,
         party_id: NonZeroU16,
         number_of_parties: NonZeroU16,
         threshold: NonZeroU16,
     ) -> eyre::Result<()> {
+        if value.is_zero() {
+            eyre::bail!("secret share must be non-zero");
+        }
         if party_id > number_of_parties {
             eyre::bail!("party ID must lie in the Shamir party set");
         }
@@ -128,6 +139,7 @@ impl<'de> Deserialize<'de> for DLogShareShamir {
 
         let repr = Repr::deserialize(deserializer)?;
         DLogShareShamir::validate(
+            &repr.value,
             &repr.public_key,
             repr.party_id,
             repr.number_of_parties,

@@ -480,6 +480,29 @@ fn signer_rejects_mismatched_identity_and_insufficient_sets() {
     };
 }
 
+/// Reject zero secret shares before signing, consistently with identifiable aggregation's
+/// requirement that public-key shares are non-zero.
+#[test]
+fn key_share_rejects_zero_secret_on_construction_and_deserialization() {
+    // f(X) = 5X - 5 has a non-zero group secret, but f(1) = 0 and f(2) = 5.
+    let five = ScalarField::from(5_u64);
+    let public_key = EdDSAPublicKey {
+        pk: (Affine::generator() * -five).into_affine(),
+    };
+    let Err(_) = DLogShareShamir::new(ScalarField::zero(), &public_key, nz(1), nz(2), nz(2)) else {
+        panic!("a zero secret share must be rejected during construction");
+    };
+
+    let nonzero_share = DLogShareShamir::new(five, &public_key, nz(2), nz(2), nz(2))
+        .expect("the non-zero share is accepted");
+    let mut encoded = serde_json::to_value(&nonzero_share).expect("share serializes");
+    encoded["party_id"] = 1.into();
+    encoded["value"] = "0".into();
+    let Err(_) = serde_json::from_value::<DLogShareShamir>(encoded) else {
+        panic!("a zero secret share must be rejected during deserialization");
+    };
+}
+
 /// A key share is bound to the public key it belongs to, and deserialization enforces that binding
 /// and the committee metadata rather than deferring it to the signing path.
 #[test]
