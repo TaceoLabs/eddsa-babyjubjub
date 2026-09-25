@@ -213,8 +213,9 @@ before starting the run.
    and process received shares with `add_party_communication`.
 3. After every other participant's share verifies, `finalize()` returns
    `keygen::finished::Finished`, containing the local secret share, every
-   public-key share, and the aggregate public key. Compare `agreement_digest()`
-   across participants before using the key; this does not replace reliable broadcast.
+   public-key share, the aggregate public key, and the agreed threshold. Compare
+   `agreement_digest()` across participants before using the key; this does not
+   replace reliable broadcast.
 
 All `n` participants must contribute even though only `t` resulting shares are
 needed to sign. An invalid contribution aborts the run. A missing contribution
@@ -244,17 +245,11 @@ DKG returns `keygen::finished::Finished<C>`. For Baby Jubjub, use
 `key_share::DLogShareShamir` for signing by binding the share to its party
 ID, total party count, and threshold; `pk` and `pk_shares` supply the public
 values required for verification and identifiable abort.
-`contributing_parties` names all participants in the run, and
-`agreement_digest()` reduces every value that must agree across participants to
-one comparable 32-byte hash.
-
-There is deliberately no automatic conversion to `DLogShareShamir`, because
-`Finished` does not carry the run's `Parameters`. Supply the party count and
-threshold yourself, and take care: a wrong-but-self-consistent value is accepted
-silently. `sign_round` derives the Lagrange coefficient from the signer set, so a
-too-small threshold only loosens the minimum-signer-set check and a too-large
-party count only loosens the range check. Neither enables a forgery, but neither
-is caught either.
+Use `Finished::my_idx` and `Finished::threshold` for the signing-share identity
+and threshold. `contributing_parties` names all participants in the run, so its
+length supplies the total party count. `agreement_digest()` reduces every value
+that must agree across participants, including the threshold, to one comparable
+32-byte hash.
 
 ## Error attribution
 

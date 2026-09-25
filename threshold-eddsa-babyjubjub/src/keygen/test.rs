@@ -132,8 +132,15 @@ fn test_keygen(num_parties: u16, threshold: u16) {
 
     // All parties agree on the session, the public key and the public key shares
     let public_key = parties[0].pk;
+    let agreement_digest = parties[0].agreement_digest();
     for party in &parties {
         assert_eq!(party.context, context, "session context is preserved");
+        assert_eq!(party.threshold, nz(threshold), "DKG threshold is preserved");
+        assert_eq!(
+            party.agreement_digest(),
+            agreement_digest,
+            "parties agree on the final key package"
+        );
         assert_eq!(party.pk, public_key, "parties agree on the public key");
         assert_eq!(
             party.pk_shares.len(),
@@ -201,14 +208,13 @@ fn test_keygen_and_sign(num_parties: u16, threshold: u16, cheating_positions: &[
 
     let x_shares = parties
         .iter()
-        .enumerate()
-        .map(|(position, party)| {
+        .map(|party| {
             DLogShareShamir::new(
                 party.sk_share,
                 &public_key,
-                party_id(position),
+                party.my_idx,
                 nz(num_parties),
-                nz(threshold),
+                party.threshold,
             )
             .expect("valid DKG signing share metadata")
         })
@@ -258,6 +264,24 @@ fn test_keygen_and_sign_7_4() {
 #[test]
 fn test_keygen_and_sign_identifies_cheating_parties() {
     test_keygen_and_sign(7, 4, &[0, 2]);
+}
+
+#[test]
+fn agreement_digest_binds_threshold() {
+    let mut parties = run_keygen(
+        3,
+        2,
+        b"keygen test: threshold agreement",
+        &mut rand::thread_rng(),
+    );
+    let agreed = parties[1].agreement_digest();
+    assert_eq!(parties[0].agreement_digest(), agreed);
+    parties[0].threshold = nz(3);
+    assert_ne!(
+        parties[0].agreement_digest(),
+        agreed,
+        "different threshold metadata must change the agreement digest"
+    );
 }
 
 #[test]
