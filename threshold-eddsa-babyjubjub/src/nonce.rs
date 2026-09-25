@@ -12,6 +12,7 @@ use ark_ec::CurveGroup;
 use ark_ff::PrimeField;
 use ark_serialize::CanonicalSerialize;
 use eddsa_babyjubjub::EdDSAPublicKey;
+use std::num::NonZeroU16;
 use uuid::Uuid;
 
 pub(crate) struct CombineTwoNonceRandomnessArgs<'a> {
@@ -20,7 +21,7 @@ pub(crate) struct CombineTwoNonceRandomnessArgs<'a> {
     pub(crate) public_key: EdDSAPublicKey,
     pub(crate) d: Affine,
     pub(crate) e: Affine,
-    pub(crate) parties: &'a [u16],
+    pub(crate) parties: &'a [NonZeroU16],
 }
 
 /// Combines the two-nonce randomness shares into the full randomness used in the challenge.
@@ -51,7 +52,7 @@ pub(crate) fn combine_two_nonce_randomness(
             .to_be_bytes(),
     );
     for party in parties {
-        hasher.update(&party.to_be_bytes());
+        hasher.update(&party.get().to_be_bytes());
     }
     let mut buf = Vec::with_capacity(d.compressed_size());
 

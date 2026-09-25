@@ -12,8 +12,12 @@ use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::UniformRand;
 use eddsa_babyjubjub::EdDSAPublicKey;
 use rand::{CryptoRng, Rng, seq::IteratorRandom};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, num::NonZeroU16};
 use uuid::Uuid;
+
+fn nz(id: u16) -> NonZeroU16 {
+    NonZeroU16::new(id).expect("party ID must be non-zero")
+}
 
 fn share<R: Rng>(
     secret: ScalarField,
@@ -34,9 +38,9 @@ fn share<R: Rng>(
             DLogShareShamir::new(
                 share,
                 public_key,
-                u16::try_from(i).expect("party ID fits"),
-                u16::try_from(num_shares).expect("party count fits"),
-                u16::try_from(degree + 1).expect("threshold fits"),
+                nz(u16::try_from(i).expect("party ID fits")),
+                nz(u16::try_from(num_shares).expect("party count fits")),
+                nz(u16::try_from(degree + 1).expect("threshold fits")),
             )
             .expect("valid share metadata"),
         );
@@ -60,14 +64,15 @@ pub(crate) fn test_threshold_eddsa_inner<R: Rng + CryptoRng>(
 ) {
     // Crete session and choose the used set of parties
     let session_id = Uuid::new_v4();
-    let used_parties =
-        (1..=u16::try_from(num_parties).expect("Fits into u16")).choose_multiple(rng, degree + 1);
+    let used_parties = (1..=u16::try_from(num_parties).expect("Fits into u16"))
+        .map(nz)
+        .choose_multiple(rng, degree + 1);
 
     // 1) Aggregator requests commitments from all servers
     let mut sessions = Vec::with_capacity(num_parties);
     let mut commitments = Vec::with_capacity(num_parties);
     for party_id in 1..=u16::try_from(num_parties).expect("party count fits") {
-        let (session, comm) = EdDSASession::pre_round(party_id, rng).expect("valid party ID");
+        let (session, comm) = EdDSASession::pre_round(nz(party_id), rng);
         sessions.push(Some(session));
         commitments.push(comm);
     }
@@ -76,7 +81,7 @@ pub(crate) fn test_threshold_eddsa_inner<R: Rng + CryptoRng>(
     // Choose the commitments of the used parties
     let used_commitments = used_parties
         .iter()
-        .map(|&i| commitments[i as usize - 1].clone())
+        .map(|&i| commitments[usize::from(i.get()) - 1].clone())
         .collect::<Vec<_>>();
 
     let challenge =
@@ -87,10 +92,10 @@ pub(crate) fn test_threshold_eddsa_inner<R: Rng + CryptoRng>(
 
     for server_idx in &used_parties {
         // we just use an option here in tests to be able to move out of the vector since the session is consumed
-        let session = sessions[*server_idx as usize - 1]
+        let session = sessions[usize::from(server_idx.get()) - 1]
             .take()
             .expect("have not used this session before");
-        let x_ = &x_shares[*server_idx as usize - 1];
+        let x_ = &x_shares[usize::from(server_idx.get()) - 1];
         let proof = session
             .sign_round(session_id, x_, message, challenge.clone())
             .expect("valid signing package");
@@ -104,7 +109,7 @@ pub(crate) fn test_threshold_eddsa_inner<R: Rng + CryptoRng>(
     // 4) Aggregator combines received signature shares
     let used_public_key_shares = used_parties
         .iter()
-        .map(|&party_id| (party_id, public_key_shares[usize::from(party_id) - 1]))
+        .map(|&party_id| (party_id, public_key_shares[usize::from(party_id.get()) - 1]))
         .collect::<BTreeMap<_, _>>();
 
     // Without identifiable abort
@@ -130,7 +135,7 @@ pub(crate) fn test_threshold_eddsa_inner<R: Rng + CryptoRng>(
     } else {
         let mut expected = cheating_positions
             .iter()
-            .map(|&position| usize::from(used_parties[position]))
+            .map(|&position| usize::from(used_parties[position].get()))
             .collect::<Vec<_>>();
         expected.sort_unstable();
         match result {
@@ -199,10 +204,15 @@ fn test_threshold_eddsa_shamir_identifies_cheating_parties() {
 #[test]
 fn aggregate_commitment_deserialization_enforces_party_invariants() {
     let mut rng = rand::thread_rng();
-    let (_, commitment) = EdDSASession::pre_round(1, &mut rng).expect("valid party ID");
+    let (_, commitment) = EdDSASession::pre_round(nz(1), &mut rng);
     let aggregate = EdDSACommitments::pre_agg(&[commitment]).expect("valid aggregate commitment");
     let mut encoded = serde_json::to_value(aggregate).expect("serialize aggregate commitment");
+    // A zero party ID is unrepresentable as a `NonZeroU16`, so Serde itself rejects it.
     encoded["contributing_parties"] = serde_json::json!([0]);
+    let Err(_) = serde_json::from_value::<EdDSACommitments>(encoded.clone()) else {
+        panic!("a zero commitment party ID must be rejected");
+    };
+    encoded["contributing_parties"] = serde_json::json!([2, 1]);
     let Err(_) = serde_json::from_value::<EdDSACommitments>(encoded) else {
         panic!("non-canonical commitment parties must be rejected");
     };
@@ -216,21 +226,32 @@ fn signer_rejects_mismatched_identity_and_insufficient_sets() {
         pk: (Affine::generator() * ScalarField::rand(&mut rng)).into_affine(),
     };
 
-    let (session, commitment) = EdDSASession::pre_round(1, &mut rng).expect("valid party ID");
+    let (session, commitment) = EdDSASession::pre_round(nz(1), &mut rng);
     let aggregate =
         EdDSACommitments::pre_agg(&[commitment]).expect("valid single-party commitment set");
-    let other_party_share = DLogShareShamir::new(ScalarField::rand(&mut rng), &public_key, 2, 2, 1)
-        .expect("valid metadata for another party");
+    let other_party_share = DLogShareShamir::new(
+        ScalarField::rand(&mut rng),
+        &public_key,
+        nz(2),
+        nz(2),
+        nz(1),
+    )
+    .expect("valid metadata for another party");
     let Err(_) = session.sign_round(Uuid::new_v4(), &other_party_share, message, aggregate) else {
         panic!("a nonce session must not sign for another key-share identity");
     };
 
-    let (session, commitment) = EdDSASession::pre_round(1, &mut rng).expect("valid party ID");
+    let (session, commitment) = EdDSASession::pre_round(nz(1), &mut rng);
     let aggregate =
         EdDSACommitments::pre_agg(&[commitment]).expect("valid single-party commitment set");
-    let two_party_threshold_share =
-        DLogShareShamir::new(ScalarField::rand(&mut rng), &public_key, 1, 2, 2)
-            .expect("valid two-party threshold metadata");
+    let two_party_threshold_share = DLogShareShamir::new(
+        ScalarField::rand(&mut rng),
+        &public_key,
+        nz(1),
+        nz(2),
+        nz(2),
+    )
+    .expect("valid two-party threshold metadata");
     let Err(_) = session.sign_round(
         Uuid::new_v4(),
         &two_party_threshold_share,
@@ -249,20 +270,27 @@ fn key_share_deserialization_enforces_its_binding() {
     let public_key = EdDSAPublicKey {
         pk: (Affine::generator() * ScalarField::rand(&mut rng)).into_affine(),
     };
-    let share = DLogShareShamir::new(ScalarField::rand(&mut rng), &public_key, 2, 3, 2)
-        .expect("valid share metadata");
+    let share = DLogShareShamir::new(
+        ScalarField::rand(&mut rng),
+        &public_key,
+        nz(2),
+        nz(3),
+        nz(2),
+    )
+    .expect("valid share metadata");
     let encoded = serde_json::to_value(&share).expect("share serializes");
     let round_tripped = serde_json::from_value::<DLogShareShamir>(encoded.clone())
         .expect("an honest share round-trips");
     assert_eq!(round_tripped.public_key, public_key.pk);
-    assert_eq!(round_tripped.party_id(), 2);
-    assert_eq!(round_tripped.threshold(), 2);
+    assert_eq!(round_tripped.party_id(), nz(2));
+    assert_eq!(round_tripped.threshold(), nz(2));
 
     let tamper = |field: &str, value: serde_json::Value| {
         let mut encoded = encoded.clone();
         encoded[field] = value;
         serde_json::from_value::<DLogShareShamir>(encoded)
     };
+    // Zero is unrepresentable as a `NonZeroU16`, so Serde itself rejects it.
     let Err(_) = tamper("party_id", 0.into()) else {
         panic!("a zero party ID must be rejected");
     };
@@ -286,9 +314,9 @@ fn key_share_deserialization_enforces_its_binding() {
     let Err(_) = DLogShareShamir::new(
         ScalarField::rand(&mut rng),
         &EdDSAPublicKey { pk: Affine::zero() },
-        1,
-        3,
-        2,
+        nz(1),
+        nz(3),
+        nz(2),
     ) else {
         panic!("a share must not be bound to a small-order public key");
     };

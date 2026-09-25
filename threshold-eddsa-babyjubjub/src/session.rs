@@ -12,6 +12,7 @@ use crate::{
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::UniformRand;
 use rand::{CryptoRng, Rng};
+use std::num::NonZeroU16;
 use uuid::Uuid;
 use zeroize::ZeroizeOnDrop;
 
@@ -24,7 +25,9 @@ use zeroize::ZeroizeOnDrop;
 /// The `sign_round` method consumes the session.
 #[derive(ZeroizeOnDrop)]
 pub struct EdDSASession {
-    pub(crate) party_id: u16,
+    // The party ID is public, only the two nonces are secrets.
+    #[zeroize(skip)]
+    pub(crate) party_id: NonZeroU16,
     pub(crate) d: ScalarField,
     pub(crate) e: ScalarField,
 }
@@ -32,16 +35,10 @@ pub struct EdDSASession {
 impl EdDSASession {
     /// Computes commitments to two random values `d_share` and `e_share`, which will be the shares of the randomness used in the `EdDSA` signature.
     /// The result is meant to be sent to one accumulating party (i.e., the aggregator) who combines all the shares of all parties and creates the challenge hash.
-    ///
-    /// # Errors
-    /// Returns an error if `party_id` is zero.
     pub fn pre_round(
-        party_id: u16,
+        party_id: NonZeroU16,
         rng: &mut (impl CryptoRng + Rng),
-    ) -> eyre::Result<(Self, PartialEdDSACommitments)> {
-        if party_id == 0 {
-            eyre::bail!("party ID must be non-zero");
-        }
+    ) -> (Self, PartialEdDSACommitments) {
         let d_share: ark_ff::Fp<ark_ff::MontBackend<ark_babyjubjub::FrConfig, 4>, 4> =
             ScalarField::rand(rng);
         let e_share = ScalarField::rand(rng);
@@ -55,7 +52,7 @@ impl EdDSASession {
             e: e_share,
         };
 
-        Ok((session, comm))
+        (session, comm)
     }
 
     /// Finalizes a signature share for a given challenge hash and session.
@@ -84,18 +81,18 @@ impl EdDSASession {
         let public_key = x_share.public_key();
         let parties = &contributing_parties;
         EdDSACommitments::validate_party_ids(parties)?;
-        if x_share.party_id == 0
-            || x_share.number_of_parties == 0
-            || x_share.party_id > x_share.number_of_parties
-            || x_share.threshold == 0
+        if x_share.party_id > x_share.number_of_parties
             || x_share.threshold > x_share.number_of_parties
         {
             eyre::bail!("invalid Shamir key-share metadata");
         }
-        if parties.last().copied().unwrap_or_default() > x_share.number_of_parties {
+        if parties
+            .last()
+            .is_some_and(|&largest| largest > x_share.number_of_parties)
+        {
             eyre::bail!("signing set contains a party outside the key's committee");
         }
-        if parties.len() < usize::from(x_share.threshold) {
+        if parties.len() < usize::from(x_share.threshold.get()) {
             eyre::bail!("signing set is smaller than the threshold bound to the key share");
         }
         if self.party_id != x_share.party_id {
@@ -104,8 +101,10 @@ impl EdDSASession {
         if parties.binary_search(&x_share.party_id).is_err() {
             eyre::bail!("signing set does not contain this party");
         }
-        let lagrange_coefficient =
-            crate::utils::single_lagrange_from_coeff::<ScalarField, _>(x_share.party_id, parties);
+        let lagrange_coefficient = crate::utils::single_lagrange_from_coeff::<ScalarField, _>(
+            x_share.party_id.get(),
+            parties.iter().map(|party| party.get()),
+        );
         // Recombine the two-nonce randomness shares into the full randomness used in the challenge.
         let (r, b) = crate::nonce::combine_two_nonce_randomness(CombineTwoNonceRandomnessArgs {
             session_id,

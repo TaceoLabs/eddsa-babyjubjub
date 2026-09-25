@@ -73,8 +73,12 @@ signers                         aggregator
    |                                `--> ordinary EdDSA signature
 ```
 
+Party IDs, the committee size, and the signing threshold are `NonZeroU16`
+values, so a zero ID is unrepresentable and rejected already during
+deserialization.
+
 Commitments and signature shares carry party IDs, and public-key shares used
-for identifiable abort are supplied in a `BTreeMap<u16, Affine>`. The map must
+for identifiable abort are supplied in a `BTreeMap<NonZeroU16, Affine>`. The map must
 come from an authenticated, immutable source; the type system cannot
 authenticate application-provided public-key metadata. Prefer
 `sign_agg_with_identifiable_abort` when an invalid share must be attributed;

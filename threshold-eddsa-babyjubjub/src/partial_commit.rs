@@ -13,6 +13,7 @@
 use crate::Affine;
 use ark_serde_compat::babyjubjub;
 use serde::{Deserialize, Serialize};
+use std::num::NonZeroU16;
 
 /// Per-party commitments to the distributed `EdDSA` signature protocol.
 ///
@@ -20,7 +21,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartialEdDSACommitments {
     /// The claimed ID of the party that created this commitment.
-    pub(crate) party_id: u16,
+    pub(crate) party_id: NonZeroU16,
     #[serde(with = "babyjubjub::affine")]
     /// The share of G*d, the first part of the two-nonce commitment to the randomness r = d + e*b
     pub(crate) d: Affine,
@@ -32,7 +33,7 @@ pub struct PartialEdDSACommitments {
 impl PartialEdDSACommitments {
     /// Return the party ID carried by this commitment.
     #[must_use]
-    pub fn party_id(&self) -> u16 {
+    pub fn party_id(&self) -> NonZeroU16 {
         self.party_id
     }
 }

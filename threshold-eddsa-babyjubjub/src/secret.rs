@@ -10,6 +10,7 @@ use ark_serde_compat::babyjubjub;
 use ark_serialize::Valid;
 use eddsa_babyjubjub::EdDSAPublicKey;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use std::num::NonZeroU16;
 use zeroize::ZeroizeOnDrop;
 
 /// Shamir Secret-share of an `EdDSA` signing secret.
@@ -28,24 +29,28 @@ pub struct DLogShareShamir {
     #[serde(with = "babyjubjub::affine")]
     #[zeroize(skip)]
     pub(crate) public_key: Affine,
-    pub(crate) party_id: u16,
-    pub(crate) number_of_parties: u16,
-    pub(crate) threshold: u16,
+    // The committee metadata is public, only `value` is a secret.
+    #[zeroize(skip)]
+    pub(crate) party_id: NonZeroU16,
+    #[zeroize(skip)]
+    pub(crate) number_of_parties: NonZeroU16,
+    #[zeroize(skip)]
+    pub(crate) threshold: NonZeroU16,
 }
 
 impl DLogShareShamir {
     /// Bind a scalar share to its party identity, Shamir committee parameters, and public key.
     ///
     /// # Errors
-    /// Returns an error unless the metadata satisfies `1 <= party_id <= number_of_parties` and
-    /// `1 <= threshold <= number_of_parties`, and `public_key` is a non-zero point in the
-    /// prime-order subgroup.
+    /// Returns an error unless the metadata satisfies `party_id <= number_of_parties` and
+    /// `threshold <= number_of_parties`, and `public_key` is a non-zero point in the prime-order
+    /// subgroup.
     pub fn new(
         value: ScalarField,
         public_key: &EdDSAPublicKey,
-        party_id: u16,
-        number_of_parties: u16,
-        threshold: u16,
+        party_id: NonZeroU16,
+        number_of_parties: NonZeroU16,
+        threshold: NonZeroU16,
     ) -> eyre::Result<Self> {
         Self::validate(&public_key.pk, party_id, number_of_parties, threshold)?;
         Ok(Self {
@@ -59,14 +64,14 @@ impl DLogShareShamir {
 
     fn validate(
         public_key: &Affine,
-        party_id: u16,
-        number_of_parties: u16,
-        threshold: u16,
+        party_id: NonZeroU16,
+        number_of_parties: NonZeroU16,
+        threshold: NonZeroU16,
     ) -> eyre::Result<()> {
-        if party_id == 0 || number_of_parties == 0 || party_id > number_of_parties {
-            eyre::bail!("party ID must lie in the non-empty Shamir party set");
+        if party_id > number_of_parties {
+            eyre::bail!("party ID must lie in the Shamir party set");
         }
-        if threshold == 0 || threshold > number_of_parties {
+        if threshold > number_of_parties {
             eyre::bail!("invalid Shamir threshold");
         }
         if public_key.is_zero() || public_key.check().is_err() {
@@ -77,7 +82,7 @@ impl DLogShareShamir {
 
     /// Return the identity bound to this share.
     #[must_use]
-    pub fn party_id(&self) -> u16 {
+    pub fn party_id(&self) -> NonZeroU16 {
         self.party_id
     }
 
@@ -91,7 +96,7 @@ impl DLogShareShamir {
 
     /// Return the threshold of the sharing this share belongs to.
     #[must_use]
-    pub fn threshold(&self) -> u16 {
+    pub fn threshold(&self) -> NonZeroU16 {
         self.threshold
     }
 }
@@ -107,9 +112,9 @@ impl<'de> Deserialize<'de> for DLogShareShamir {
             value: ScalarField,
             #[serde(with = "babyjubjub::affine")]
             public_key: Affine,
-            party_id: u16,
-            number_of_parties: u16,
-            threshold: u16,
+            party_id: NonZeroU16,
+            number_of_parties: NonZeroU16,
+            threshold: NonZeroU16,
         }
 
         // The intermediate representation holds the secret scalar, so clear it rather than leaving a

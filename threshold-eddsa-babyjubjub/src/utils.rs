@@ -18,7 +18,7 @@ pub fn lagrange_from_coeff<F: PrimeField + From<T>, T: Copy + Eq>(coeffs: &[T]) 
     let num = coeffs.len();
     let mut res = Vec::with_capacity(num);
     for i in coeffs {
-        res.push(single_lagrange_from_coeff(*i, coeffs));
+        res.push(single_lagrange_from_coeff(*i, coeffs.iter().copied()));
     }
     res
 }
@@ -28,7 +28,7 @@ pub fn lagrange_from_coeff<F: PrimeField + From<T>, T: Copy + Eq>(coeffs: &[T]) 
 /// # Arguments
 ///
 /// * `my_id` - Party identifier.
-/// * `coeffs` - Slice of party indices.
+/// * `coeffs` - Iterator over the party indices.
 ///
 /// # Returns
 ///
@@ -38,14 +38,14 @@ pub fn lagrange_from_coeff<F: PrimeField + From<T>, T: Copy + Eq>(coeffs: &[T]) 
 /// Might panic if chosen `T` does not fit into `Primefield`.
 pub fn single_lagrange_from_coeff<F: PrimeField + From<T>, T: Copy + Eq>(
     my_id: T,
-    coeffs: &[T],
+    coeffs: impl IntoIterator<Item = T>,
 ) -> F {
     let mut num = F::one();
     let mut den = F::one();
     let i_ = F::from(my_id);
     for j in coeffs {
-        if my_id != *j {
-            let j_ = F::from(*j);
+        if my_id != j {
+            let j_ = F::from(j);
             num *= j_;
             den *= j_ - i_;
         }

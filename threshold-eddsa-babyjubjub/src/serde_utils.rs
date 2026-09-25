@@ -5,7 +5,7 @@ use serde::{
     de::{Error as _, SeqAccess, Visitor},
 };
 
-/// Party identifiers and protocol thresholds are represented as `u16` values,
+/// Party identifiers and protocol thresholds are represented as 16-bit (`NonZeroU16`) values,
 /// so no honest participant-sized collection can exceed this limit.
 ///
 /// This is a generic ceiling, not a tight bound: the exact expected length is usually

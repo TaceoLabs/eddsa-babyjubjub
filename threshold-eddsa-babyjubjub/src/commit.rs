@@ -18,7 +18,7 @@ use eddsa_babyjubjub::{EdDSAPublicKey, EdDSASignature};
 use itertools::izip;
 use num_bigint::BigUint;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, num::NonZeroU16};
 use uuid::Uuid;
 
 /// Aggregated commitments for the distributed `EdDSA` protocol.
@@ -35,16 +35,16 @@ pub struct EdDSACommitments {
     /// The aggregated G*e.
     pub(crate) e: Affine,
     /// The parties that contributed to this commitment.
-    pub(crate) contributing_parties: Vec<u16>,
+    pub(crate) contributing_parties: Vec<NonZeroU16>,
 }
 
 impl EdDSACommitments {
     /// Create an aggregated commitment object from component affine points and party IDs.
     ///
     /// # Errors
-    /// Returns an error if a commitment is invalid, or if party IDs are empty, zero, duplicated,
-    /// or not canonically ordered.
-    pub fn new(d: Affine, e: Affine, parties: Vec<u16>) -> eyre::Result<Self> {
+    /// Returns an error if a commitment is invalid, or if party IDs are empty, duplicated, or not
+    /// canonically ordered.
+    pub fn new(d: Affine, e: Affine, parties: Vec<NonZeroU16>) -> eyre::Result<Self> {
         if d.check().is_err() || e.check().is_err() {
             eyre::bail!("commitments must be valid subgroup points");
         }
@@ -58,7 +58,7 @@ impl EdDSACommitments {
 
     /// Returns the parties that contributed to this commitment.
     #[must_use]
-    pub fn get_contributing_parties(&self) -> &[u16] {
+    pub fn get_contributing_parties(&self) -> &[NonZeroU16] {
         &self.contributing_parties
     }
 
@@ -112,7 +112,7 @@ impl EdDSACommitments {
         shares: &[EdDSASigShare],
         message: BaseField,
         public_key: &EdDSAPublicKey,
-        x_share_commitments: &BTreeMap<u16, Affine>,
+        x_share_commitments: &BTreeMap<NonZeroU16, Affine>,
         commitments: &[PartialEdDSACommitments],
     ) -> Result<EdDSASignature, IdentifiableAbortError> {
         Self::validate_party_ids(&self.contributing_parties)?;
@@ -138,8 +138,8 @@ impl EdDSACommitments {
             .iter()
             .map(|party| {
                 crate::utils::single_lagrange_from_coeff::<ScalarField, _>(
-                    *party,
-                    &self.contributing_parties,
+                    party.get(),
+                    self.contributing_parties.iter().map(|party| party.get()),
                 )
             })
             .collect::<Vec<_>>();
@@ -189,7 +189,7 @@ impl EdDSACommitments {
             let r = commitment.d + commitment.e * b;
             if !verify_for_identifiable_abort(x_share_commitment, r.into_affine(), s, c_ * lagrange)
             {
-                cheating_parties.push(usize::from(self.contributing_parties[id]));
+                cheating_parties.push(usize::from(self.contributing_parties[id].get()));
             }
         }
 
@@ -264,12 +264,9 @@ impl EdDSACommitments {
         Ok(shares.into_values().collect())
     }
 
-    pub(crate) fn validate_party_ids(parties: &[u16]) -> eyre::Result<()> {
+    pub(crate) fn validate_party_ids(parties: &[NonZeroU16]) -> eyre::Result<()> {
         if parties.is_empty() {
             eyre::bail!("at least one contributing party is required");
-        }
-        if parties[0] == 0 {
-            eyre::bail!("party IDs must be non-zero");
         }
         if parties.windows(2).any(|ids| ids[0] >= ids[1]) {
             eyre::bail!("party IDs must be unique and canonically ordered");
@@ -290,7 +287,7 @@ impl<'de> Deserialize<'de> for EdDSACommitments {
             #[serde(with = "babyjubjub::affine")]
             e: Affine,
             #[serde(deserialize_with = "crate::serde_utils::deserialize_protocol_vec")]
-            contributing_parties: Vec<u16>,
+            contributing_parties: Vec<NonZeroU16>,
         }
 
         let repr = Repr::deserialize(deserializer)?;
