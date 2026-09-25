@@ -16,7 +16,7 @@ use zeroize::ZeroizeOnDrop;
 /// Shamir Secret-share of an `EdDSA` signing secret.
 ///
 /// The scalar is bound to the identity, committee parameters, and public key it belongs to, so
-/// [`sign_round`](crate::session::EdDSASession::sign_round) can check every one of
+/// [`sign_round`](crate::signer::EdDSASession::sign_round) can check every one of
 /// them instead of trusting a caller-supplied argument. Deserialization enforces the same
 /// invariants as [`DLogShareShamir::new`].
 ///

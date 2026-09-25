@@ -3,85 +3,33 @@
 //! This crate implements the `t`-out-of-`n` variant of the protocol, where the signing key is
 //! shared via a Shamir polynomial of degree `d`, so any `d + 1` parties can jointly produce a
 //! signature by weighting their shares with the matching Lagrange coefficients.
+//!
+//! The protocol involves two roles, mirrored by the module layout:
+//!
+//! - Each **signer** ([`signer`]) holds a [`DLogShareShamir`] key share and runs
+//!   [`EdDSASession::pre_round`] to produce a [`PartialEdDSACommitments`] message, then
+//!   [`EdDSASession::sign_round`] to produce an [`EdDSASigShare`].
+//! - The **aggregator** ([`aggregator`]) combines the partial commitments via
+//!   [`EdDSACommitments::pre_agg`] into the challenge input sent back to the signers, and combines
+//!   their signature shares into the final signature via [`EdDSACommitments::sign_agg`] or
+//!   [`EdDSACommitments::sign_agg_with_identifiable_abort`].
 
-pub mod commit;
-pub mod nonce;
-pub mod partial_commit;
-pub mod secret;
-mod serde_utils;
-pub mod session;
-pub mod signature;
+pub mod aggregator;
+pub mod error;
+mod internal;
+pub mod key_share;
+pub mod signer;
 #[cfg(test)]
-mod test;
-pub(crate) mod utils;
+mod tests;
+
+pub use aggregator::EdDSACommitments;
+pub use error::{IdentifiableAbortError, MaliciousPartiesError};
+pub use key_share::DLogShareShamir;
+pub use signer::{EdDSASession, EdDSASigShare, PartialEdDSACommitments};
 
 use ark_ec::{CurveGroup, PrimeGroup};
-use std::num::NonZeroU16;
 
 pub(crate) type Curve = ark_babyjubjub::EdwardsProjective;
 pub(crate) type Affine = <Curve as CurveGroup>::Affine;
 pub(crate) type BaseField = <Curve as CurveGroup>::BaseField;
-pub(crate) type Projective = ark_babyjubjub::EdwardsProjective;
 pub(crate) type ScalarField = <Curve as PrimeGroup>::ScalarField;
-
-pub(crate) const FROST_3_NONCE_COMBINER_LABEL: &[u8] = b"FROST_3_NONCE_COMBINER";
-
-/// The IDs of the parties that contributed a malformed signature share.
-#[derive(Debug, thiserror::Error)]
-#[error("Malicious parties detected: {0:?}")]
-pub struct MaliciousPartiesError(Vec<NonZeroU16>);
-
-impl MaliciousPartiesError {
-    /// Consumes the error and returns the IDs of the parties identified as cheating.
-    #[must_use]
-    pub fn into_inner(self) -> Vec<NonZeroU16> {
-        self.0
-    }
-
-    /// The IDs of the parties identified as cheating.
-    #[must_use]
-    pub fn party_ids(&self) -> &[NonZeroU16] {
-        &self.0
-    }
-}
-
-/// The error returned by aggregation with identifiable abort.
-///
-/// The two variants are the two distinguishable outcomes, and the distinction matters: only
-/// [`IdentifiableAbortError::MaliciousParties`] attributes blame. An
-/// [`IdentifiableAbortError::InvalidInput`] means the aggregator's own inputs were inconsistent, so
-/// no share was validated and no participant may be accused. Use
-/// [`IdentifiableAbortError::malicious_parties`] rather than only logging the error, or the
-/// attribution this API exists to produce is silently discarded.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum IdentifiableAbortError {
-    /// At least one signature share failed its validation equation.
-    #[error(transparent)]
-    MaliciousParties(#[from] MaliciousPartiesError),
-    /// The supplied aggregation inputs do not form a consistent set, so no share could be checked.
-    #[error(transparent)]
-    InvalidInput(#[from] eyre::Report),
-}
-
-impl IdentifiableAbortError {
-    /// The IDs of the parties whose signature share failed validation, or `None` when the abort was
-    /// caused by inconsistent aggregation input rather than by a malformed share.
-    #[must_use]
-    pub fn malicious_parties(&self) -> Option<&[NonZeroU16]> {
-        match self {
-            Self::MaliciousParties(error) => Some(error.party_ids()),
-            Self::InvalidInput(_) => None,
-        }
-    }
-
-    /// Consumes the error and returns the IDs of the parties identified as cheating, or `None` when
-    /// the abort was caused by inconsistent aggregation input.
-    #[must_use]
-    pub fn into_malicious_parties(self) -> Option<Vec<NonZeroU16>> {
-        match self {
-            Self::MaliciousParties(error) => Some(error.into_inner()),
-            Self::InvalidInput(_) => None,
-        }
-    }
-}

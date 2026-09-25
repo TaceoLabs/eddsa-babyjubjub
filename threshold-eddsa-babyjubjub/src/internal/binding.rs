@@ -15,6 +15,8 @@ use eddsa_babyjubjub::EdDSAPublicKey;
 use std::num::NonZeroU16;
 use uuid::Uuid;
 
+pub(crate) const FROST_3_NONCE_COMBINER_LABEL: &[u8] = b"FROST_3_NONCE_COMBINER";
+
 pub(crate) struct CombineTwoNonceRandomnessArgs<'a> {
     pub(crate) session_id: Uuid,
     pub(crate) message: BaseField,
@@ -42,7 +44,7 @@ pub(crate) fn combine_two_nonce_randomness(
         parties,
     } = args;
     let mut hasher = blake3::Hasher::new();
-    hasher.update(crate::FROST_3_NONCE_COMBINER_LABEL);
+    hasher.update(FROST_3_NONCE_COMBINER_LABEL);
     hasher.update(session_id.as_bytes());
     // The signer set is the only variable-length field in the preimage, so it is length-prefixed:
     // without the prefix, injectivity would rely on every following field staying fixed-width.

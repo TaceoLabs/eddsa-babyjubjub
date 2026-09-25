@@ -1,20 +1,64 @@
-//! Per-Party Session State for Threshold `EdDSA`
+//! The Signing-Party Side of Threshold `EdDSA`
 //!
 //! This module defines the `EdDSASession` struct, which holds the secret two-nonce randomness a
-//! party samples in the pre-round and consumes again when producing its signature share.
+//! party samples in the pre-round and consumes again when producing its signature share, together
+//! with the two messages a signer emits: the `PartialEdDSACommitments` commitment share sent to
+//! the aggregator in the pre-round, and the `EdDSASigShare` produced in the sign round.
 //!
 //! Secret randomness is never clonable, and session types deliberately do not implement `Debug` to avoid accidental leakage.
 
 use crate::{
-    Affine, BaseField, ScalarField, commit::EdDSACommitments, nonce::CombineTwoNonceRandomnessArgs,
-    partial_commit::PartialEdDSACommitments, secret::DLogShareShamir, signature::EdDSASigShare,
+    Affine, BaseField, ScalarField, aggregator::EdDSACommitments,
+    internal::binding::CombineTwoNonceRandomnessArgs, key_share::DLogShareShamir,
 };
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::UniformRand;
+use ark_serde_compat::babyjubjub;
 use rand::{CryptoRng, Rng};
+use serde::{Deserialize, Serialize};
 use std::num::NonZeroU16;
 use uuid::Uuid;
 use zeroize::ZeroizeOnDrop;
+
+/// Per-party commitments to the distributed `EdDSA` signature protocol.
+///
+/// Each party sends these commitments, which consist of a split of the actual response and nonce splits, for aggregation and creation of the global challenge hash.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartialEdDSACommitments {
+    /// The claimed ID of the party that created this commitment.
+    pub(crate) party_id: NonZeroU16,
+    #[serde(with = "babyjubjub::affine")]
+    /// The share of G*d, the first part of the two-nonce commitment to the randomness r = d + e*b
+    pub(crate) d: Affine,
+    #[serde(with = "babyjubjub::affine")]
+    /// The share of G*e, the second part of the two-nonce commitment to the randomness r = d + e*b
+    pub(crate) e: Affine,
+}
+
+impl PartialEdDSACommitments {
+    /// Return the party ID carried by this commitment.
+    #[must_use]
+    pub fn party_id(&self) -> NonZeroU16 {
+        self.party_id
+    }
+}
+
+/// Individual party's signature share for the `EdDSA` signature protocol.
+/// Carries a response share for the signature.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdDSASigShare(
+    pub(crate) NonZeroU16,
+    // The share of the response s.
+    #[serde(with = "ark_serde_compat::field")] pub(crate) ScalarField,
+);
+
+impl EdDSASigShare {
+    /// Return the party ID bound into this signature share.
+    #[must_use]
+    pub fn party_id(&self) -> NonZeroU16 {
+        self.0
+    }
+}
 
 /// The internal storage of a party in a distributed `EdDSA` protocol.
 ///
@@ -101,19 +145,21 @@ impl EdDSASession {
         if parties.binary_search(&x_share.party_id).is_err() {
             eyre::bail!("signing set does not contain this party");
         }
-        let lagrange_coefficient = crate::utils::single_lagrange_from_coeff::<ScalarField, _>(
-            x_share.party_id.get(),
-            parties.iter().map(|party| party.get()),
-        );
+        let lagrange_coefficient =
+            crate::internal::lagrange::single_lagrange_from_coeff::<ScalarField, _>(
+                x_share.party_id.get(),
+                parties.iter().map(|party| party.get()),
+            );
         // Recombine the two-nonce randomness shares into the full randomness used in the challenge.
-        let (r, b) = crate::nonce::combine_two_nonce_randomness(CombineTwoNonceRandomnessArgs {
-            session_id,
-            message,
-            public_key: public_key.clone(),
-            d,
-            e,
-            parties,
-        });
+        let (r, b) =
+            crate::internal::binding::combine_two_nonce_randomness(CombineTwoNonceRandomnessArgs {
+                session_id,
+                message,
+                public_key: public_key.clone(),
+                d,
+                e,
+                parties,
+            });
 
         // Recompute the challenge hash to ensure the challenge is well-formed.
         let c = eddsa_babyjubjub::challenge_hash(message, r, public_key.pk);

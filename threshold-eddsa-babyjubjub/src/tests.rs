@@ -2,11 +2,8 @@
 //! and aggregation with identifiable abort.
 
 use crate::{
-    Affine, BaseField, ScalarField,
-    commit::EdDSACommitments,
-    secret::DLogShareShamir,
-    session::EdDSASession,
-    utils::{self, evaluate_poly},
+    Affine, BaseField, DLogShareShamir, EdDSACommitments, EdDSASession, ScalarField,
+    internal::lagrange::{evaluate_poly, lagrange_from_coeff},
 };
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{One, UniformRand, Zero};
@@ -14,6 +11,29 @@ use eddsa_babyjubjub::EdDSAPublicKey;
 use rand::{CryptoRng, Rng, seq::IteratorRandom};
 use std::{collections::BTreeMap, num::NonZeroU16};
 use uuid::Uuid;
+
+/// Reconstructs a curve point from its Shamir shares and lagrange coefficients.
+fn reconstruct_point<C: CurveGroup>(shares: &[C::Affine], lagrange: &[C::ScalarField]) -> C {
+    debug_assert_eq!(shares.len(), lagrange.len());
+    C::msm_unchecked(shares, lagrange)
+}
+
+fn reconstruct_random_pointshares<C: CurveGroup, R: Rng>(
+    shares: &[C],
+    degree: usize,
+    rng: &mut R,
+) -> C {
+    let num_parties = shares.len();
+    let parties = (1..=num_parties as u64).choose_multiple(rng, degree + 1);
+    // maybe sufficient to into_affine in the following map
+    let shares = parties
+        .iter()
+        .map(|&i| shares[usize::try_from(i - 1).expect("Fits into usize")])
+        .collect::<Vec<_>>();
+    let shares = C::batch_convert_to_mul_base(&shares);
+    let lagrange = lagrange_from_coeff(&parties);
+    reconstruct_point(&shares, &lagrange)
+}
 
 fn nz(id: u16) -> NonZeroU16 {
     NonZeroU16::new(id).expect("party ID must be non-zero")
@@ -165,8 +185,7 @@ fn test_threshold_eddsa(num_parties: usize, degree: usize, cheating_positions: &
         .iter()
         .map(|x| Affine::generator() * x.value)
         .collect::<Vec<_>>();
-    let public_key_ =
-        utils::test_utils::reconstruct_random_pointshares(&public_key_shares, degree, &mut rng);
+    let public_key_ = reconstruct_random_pointshares(&public_key_shares, degree, &mut rng);
     assert_eq!(public_key.pk, public_key_);
 
     let public_key_shares = public_key_shares

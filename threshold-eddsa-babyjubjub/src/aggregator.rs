@@ -1,4 +1,4 @@
-//! Aggregated Commitments for Threshold `EdDSA`
+//! The Aggregator Side of Threshold `EdDSA`
 //!
 //! This module defines the `EdDSACommitments` struct, which sums the per-party commitment shares
 //! of the `d + 1` contributing parties and is used both as the challenge hash input and to combine
@@ -6,9 +6,10 @@
 //! with identifiable abort, which pinpoints the parties that contributed a malformed share.
 
 use crate::{
-    Affine, BaseField, IdentifiableAbortError, MaliciousPartiesError, Projective, ScalarField,
-    nonce::CombineTwoNonceRandomnessArgs, partial_commit::PartialEdDSACommitments,
-    signature::EdDSASigShare,
+    Affine, BaseField, Curve, ScalarField,
+    error::{IdentifiableAbortError, MaliciousPartiesError},
+    internal::binding::CombineTwoNonceRandomnessArgs,
+    signer::{EdDSASigShare, PartialEdDSACommitments},
 };
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{AdditiveGroup, Zero};
@@ -80,14 +81,15 @@ impl EdDSACommitments {
         for share in shares {
             s += share.1;
         }
-        let (r, _) = crate::nonce::combine_two_nonce_randomness(CombineTwoNonceRandomnessArgs {
-            session_id,
-            message,
-            public_key,
-            d: self.d,
-            e: self.e,
-            parties: &self.contributing_parties,
-        });
+        let (r, _) =
+            crate::internal::binding::combine_two_nonce_randomness(CombineTwoNonceRandomnessArgs {
+                session_id,
+                message,
+                public_key,
+                d: self.d,
+                e: self.e,
+                parties: &self.contributing_parties,
+            });
 
         Ok(EdDSASignature { r, s })
     }
@@ -149,37 +151,37 @@ impl EdDSACommitments {
             .contributing_parties
             .iter()
             .map(|party| {
-                crate::utils::single_lagrange_from_coeff::<ScalarField, _>(
+                crate::internal::lagrange::single_lagrange_from_coeff::<ScalarField, _>(
                     party.get(),
                     self.contributing_parties.iter().map(|party| party.get()),
                 )
             })
             .collect::<Vec<_>>();
-        let (individual_d, individual_e) = commitment_by_party.values().fold(
-            (Projective::zero(), Projective::zero()),
-            |(d, e), commitment| (d + commitment.d, e + commitment.e),
-        );
+        let (individual_d, individual_e) = commitment_by_party
+            .values()
+            .fold((Curve::zero(), Curve::zero()), |(d, e), commitment| {
+                (d + commitment.d, e + commitment.e)
+            });
         if individual_d.into_affine() != self.d || individual_e.into_affine() != self.e {
             return Err(eyre::eyre!("individual and aggregate nonce commitments differ").into());
         }
         let reconstructed_pk = x_share_commitments
             .values()
             .zip(&lagrange_coefficients)
-            .fold(Projective::zero(), |acc, (point, lambda)| {
-                acc + *point * lambda
-            });
+            .fold(Curve::zero(), |acc, (point, lambda)| acc + *point * lambda);
         if reconstructed_pk.into_affine() != public_key.pk {
             return Err(eyre::eyre!("public-key shares do not reconstruct the public key").into());
         }
 
-        let (r, b) = crate::nonce::combine_two_nonce_randomness(CombineTwoNonceRandomnessArgs {
-            session_id,
-            message,
-            public_key: public_key.to_owned(),
-            d: self.d,
-            e: self.e,
-            parties: &self.contributing_parties,
-        });
+        let (r, b) =
+            crate::internal::binding::combine_two_nonce_randomness(CombineTwoNonceRandomnessArgs {
+                session_id,
+                message,
+                public_key: public_key.to_owned(),
+                d: self.d,
+                e: self.e,
+                parties: &self.contributing_parties,
+            });
 
         // Recompute the challenge hash to ensure the challenge is well-formed.
         let c = eddsa_babyjubjub::challenge_hash(message, r, public_key.pk);
@@ -242,8 +244,8 @@ impl EdDSACommitments {
         }
         Self::validate_party_ids(&contributing_parties)?;
 
-        let mut d = Projective::zero();
-        let mut e = Projective::zero();
+        let mut d = Curve::zero();
+        let mut e = Curve::zero();
 
         for comm in commitments.values() {
             d += comm.d;
@@ -300,7 +302,7 @@ impl<'de> Deserialize<'de> for EdDSACommitments {
             d: Affine,
             #[serde(with = "babyjubjub::affine")]
             e: Affine,
-            #[serde(deserialize_with = "crate::serde_utils::deserialize_protocol_vec")]
+            #[serde(deserialize_with = "crate::internal::serde::deserialize_protocol_vec")]
             contributing_parties: Vec<NonZeroU16>,
         }
 

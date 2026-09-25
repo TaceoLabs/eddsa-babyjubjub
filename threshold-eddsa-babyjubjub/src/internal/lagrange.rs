@@ -77,36 +77,3 @@ pub fn evaluate_poly<F: PrimeField>(poly: &[F], x: F) -> F {
     }
     eval
 }
-
-#[cfg(test)]
-pub(crate) mod test_utils {
-    use crate::utils::lagrange_from_coeff;
-    use ark_ec::CurveGroup;
-    use rand::{Rng, seq::IteratorRandom as _};
-
-    /// Reconstructs a curve point from its Shamir shares and lagrange coefficients.
-    pub(crate) fn reconstruct_point<C: CurveGroup>(
-        shares: &[C::Affine],
-        lagrange: &[C::ScalarField],
-    ) -> C {
-        debug_assert_eq!(shares.len(), lagrange.len());
-        C::msm_unchecked(shares, lagrange)
-    }
-
-    pub(crate) fn reconstruct_random_pointshares<C: CurveGroup, R: Rng>(
-        shares: &[C],
-        degree: usize,
-        rng: &mut R,
-    ) -> C {
-        let num_parties = shares.len();
-        let parties = (1..=num_parties as u64).choose_multiple(rng, degree + 1);
-        // maybe sufficient to into_affine in the following map
-        let shares = parties
-            .iter()
-            .map(|&i| shares[usize::try_from(i - 1).expect("Fits into usize")])
-            .collect::<Vec<_>>();
-        let shares = C::batch_convert_to_mul_base(&shares);
-        let lagrange = lagrange_from_coeff(&parties);
-        reconstruct_point(&shares, &lagrange)
-    }
-}
