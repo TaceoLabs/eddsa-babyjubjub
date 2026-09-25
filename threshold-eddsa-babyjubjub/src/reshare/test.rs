@@ -155,13 +155,19 @@ fn assert_consistent_shares<R: Rng>(
         "every party finished the protocol"
     );
 
-    // All parties agree on the session, the public key and the public key shares
+    // All parties agree on the final key package, including the current threshold.
     let public_key = parties[0].pk;
+    let agreement_digest = parties[0].agreement_digest();
     for party in parties {
         assert_eq!(party.context, context, "session context is preserved");
         assert_eq!(
             party.threshold, params.threshold,
             "output threshold matches the current sharing parameters"
+        );
+        assert_eq!(
+            party.agreement_digest(),
+            agreement_digest,
+            "parties agree on the final key package"
         );
         assert_eq!(party.pk, public_key, "parties agree on the public key");
         assert_eq!(
@@ -266,14 +272,13 @@ fn sign<R: Rng + CryptoRng>(
 
     let x_shares = parties
         .iter()
-        .enumerate()
-        .map(|(position, party)| {
+        .map(|party| {
             DLogShareShamir::new(
                 party.sk_share,
                 &public_key,
-                party_id(position),
-                params.number_of_parties,
-                params.threshold,
+                party.my_idx,
+                nz(u16::try_from(party.pk_shares.len()).expect("party count fits into u16")),
+                party.threshold,
             )
             .expect("valid reshared signing share metadata")
         })
@@ -366,6 +371,16 @@ fn test_reshare_to_bigger_set() {
 #[test]
 fn test_reshare_to_same_size_set() {
     test_reshare((5, 3), (5, 3));
+}
+
+#[test]
+fn test_reshare_and_sign_to_minimum_set() {
+    test_reshare_and_sign((5, 3), (2, 2), &[]);
+}
+
+#[test]
+fn test_reshare_and_sign_with_minimum_sets() {
+    test_reshare_and_sign((2, 2), (2, 2), &[]);
 }
 
 #[test]
