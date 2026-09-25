@@ -11,9 +11,16 @@
 //! - The aggregated two-nonce commitment (`d`, `e`) together with the set of contributing parties.
 //! - Combination of the signature shares, and the challenge-based verification used for identifiable abort.
 
-use crate::Affine;
+use crate::{
+    Affine, BaseField, ScalarField, nonce::CombineTwoNonceRandomnessArgs, signature::EdDSASigShare,
+};
+use ark_ec::AffineRepr;
+use ark_ff::{AdditiveGroup, PrimeField, Zero};
 use ark_serde_compat::babyjubjub;
+use eddsa_babyjubjub::{EdDSAPublicKey, EdDSASignature};
+use num_bigint::BigUint;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use uuid::Uuid;
 
 /// Aggregated commitments for the distributed `EdDSA` protocol.
 ///
@@ -31,6 +38,32 @@ pub struct EdDSACommitments {
 }
 
 impl EdDSACommitments {
+    /// Combine all parties' signature shares into a single `EdDSA` signature object.
+    ///
+    /// Must use the same order of contributing parties as in aggregation
+    pub(crate) fn sign_agg<'a>(
+        self,
+        session_id: Uuid,
+        shares: impl Iterator<Item = &'a EdDSASigShare>,
+        message: BaseField,
+        public_key: EdDSAPublicKey,
+    ) -> EdDSASignature {
+        let mut s = ScalarField::zero();
+        for share in shares {
+            s += share.1;
+        }
+        let (r, _) = crate::nonce::combine_two_nonce_randomness(CombineTwoNonceRandomnessArgs {
+            session_id,
+            message,
+            public_key,
+            d: self.d,
+            e: self.e,
+            parties: &self.contributing_parties,
+        });
+
+        EdDSASignature { r, s }
+    }
+
     pub(crate) fn validate_party_ids(parties: &[u16]) -> eyre::Result<()> {
         if parties.is_empty() {
             eyre::bail!("at least one contributing party is required");
@@ -68,4 +101,31 @@ impl<'de> Deserialize<'de> for EdDSACommitments {
             contributing_parties: repr.contributing_parties,
         })
     }
+}
+
+// This is modelled after the `verify` function in `eddsa-babyjubjub/src/lib.rs`, but it takes the challenge as input
+pub(crate) fn verify_for_identifiable_abort(
+    pk: &Affine,
+    r: Affine,
+    s: ScalarField,
+    c: ScalarField,
+) -> bool {
+    let s_biguint: BigUint = s.into();
+    if s_biguint >= ScalarField::MODULUS.into() {
+        return false;
+    }
+
+    if pk.is_zero()
+        || !pk.is_on_curve()
+        || !pk.is_in_correct_subgroup_assuming_on_curve()
+        || !r.is_on_curve()
+    {
+        return false;
+    }
+
+    let mut v = (Affine::generator() * s) - r - (*pk * c); // multiply by the cofactor 8
+    v.double_in_place();
+    v.double_in_place();
+    v.double_in_place();
+    v.is_zero()
 }

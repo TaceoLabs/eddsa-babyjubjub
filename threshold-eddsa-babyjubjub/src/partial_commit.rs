@@ -30,3 +30,9 @@ pub struct PartialEdDSACommitments {
     /// The share of G*e, the second part of the two-nonce commitment to the randomness r = d + e*b
     pub(crate) e: Affine,
 }
+
+impl PartialEdDSACommitments {
+    pub(crate) fn party_id(&self) -> u16 {
+        self.party_id
+    }
+}

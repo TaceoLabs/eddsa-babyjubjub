@@ -5,13 +5,18 @@ pub mod nonce;
 pub mod partial_commit;
 mod serde_utils;
 pub mod session;
+pub mod shamir;
 pub mod signature;
 
 use ark_ec::{CurveGroup, PrimeGroup};
 
 pub(crate) type Curve = ark_babyjubjub::EdwardsProjective;
 pub(crate) type Affine = <Curve as CurveGroup>::Affine;
+pub(crate) type BaseField = <Curve as CurveGroup>::BaseField;
+pub(crate) type Projective = ark_babyjubjub::EdwardsProjective;
 pub(crate) type ScalarField = <Curve as PrimeGroup>::ScalarField;
+
+pub(crate) const FROST_3_NONCE_COMBINER_LABEL: &[u8] = b"FROST_3_NONCE_COMBINER";
 
 /// The IDs of the parties that contributed a malformed signature share.
 #[derive(Debug, thiserror::Error)]
