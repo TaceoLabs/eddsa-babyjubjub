@@ -14,8 +14,8 @@ existing single-party `EdDSAPublicKey::verify` API.
 - `t`-out-of-`n` EdDSA signing with Shamir-shared keys.
 - A FROST3 two-nonce preprocessing round that can run before the message is
   known, followed by one signing round.
-- Binding of the signer set, session ID, aggregate nonce commitments, public
-  key, and message into the BLAKE3 nonce-combining hash.
+- Binding of an opaque caller-supplied context, the signer set, aggregate nonce
+  commitments, public key, and message into the BLAKE3 nonce-combining hash.
 - Poseidon2 for the final EdDSA Fiat-Shamir challenge.
 - Signature-share aggregation with optional identifiable abort.
 - Serde support for protocol messages and zeroization of secret state on drop.
@@ -40,7 +40,7 @@ under the wrong ID lets its sender speak, and be blamed, as someone else.
 | Protocol step | Required channel | Why |
 | --- | --- | --- |
 | FROST3 preprocessing commitments and signature shares | **Authenticated signer-to-aggregator communication** | The aggregator must attribute each contribution to the correct signer. Reliable broadcast is not required for the signing flow implemented here. |
-| Signing requests (session ID, signer set, aggregate commitments, message) | **Authenticated aggregator-to-signer communication** | Blame from `sign_agg_with_identifiable_abort` is sound only if every signer received exactly the inputs the aggregator later verifies against. A tampered request makes the honest recipient's share fail validation, so the honest signer is blamed. |
+| Signing requests (context, signer set, aggregate commitments, message) | **Authenticated aggregator-to-signer communication** | Blame from `sign_agg_with_identifiable_abort` is sound only if every signer received exactly the inputs the aggregator later verifies against. A tampered request makes the honest recipient's share fail validation, so the honest signer is blamed. |
 
 Neither commitments nor signature shares carry a session binding of their own,
 so the authenticated channels must also be replay-protected and bound to the
@@ -76,7 +76,7 @@ The high-level message flow is:
 signers                         aggregator
    |-- pre-round commitments ------>|
    |                                | select signer set T
-   |<-- (session ID, T, aggregate commitments, public key, message)
+   |<-- (context, T, aggregate commitments, public key, message)
    |-- signature shares ----------->|
    |                                | aggregate and verify
    |                                `--> ordinary EdDSA signature
@@ -118,10 +118,21 @@ let valid = public_key.verify(message, &signature);
 ### Nonce and session safety
 
 `EdDSASession` deliberately cannot be cloned and `sign_round` consumes it.
-Never reuse or restore its nonce state. Use a fresh, globally unique UUID for
-each logical signing attempt, and ensure every participant agrees on the same
-session ID, signer set, public key, and message. Secret-key shares must be
-stored and transported as secrets.
+Never reuse or restore its nonce state. Secret-key shares must be stored and
+transported as secrets.
+
+`sign_round` and the aggregation APIs take an opaque `context: &[u8]` that is
+mixed into the nonce-binding hash. Every participant of one session must use
+byte-identical context bytes, alongside the same signer set, public key, and
+message; a participant with a mismatched context produces an invalid share and
+is blamed by `sign_agg_with_identifiable_abort`. Use the context to bind the
+session to application data — a unique session identifier, an application
+label, a key epoch. Unforgeability does not depend on it (the fresh nonce
+commitments already make each session's binding factor unique), and it is not
+verifier-visible domain separation: the final signature is a plain EdDSA
+signature over the message and verifies regardless of the context it was
+produced under. An empty context is therefore safe, but forgoes the early
+abort on crossed sessions that a unique per-session context provides.
 
 ### Side-channel limitations
 

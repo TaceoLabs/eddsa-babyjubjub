@@ -19,7 +19,6 @@ use eddsa_babyjubjub::{EdDSAPublicKey, EdDSASignature};
 use itertools::izip;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use std::{collections::BTreeMap, num::NonZeroU16};
-use uuid::Uuid;
 
 /// Aggregated commitments for the distributed `EdDSA` protocol.
 ///
@@ -64,14 +63,16 @@ impl EdDSACommitments {
 
     /// Combine all parties' signature shares into a single `EdDSA` signature object.
     ///
-    /// Signature shares are matched to the contributing set by their embedded party IDs.
+    /// Signature shares are matched to the contributing set by their embedded party IDs. The
+    /// opaque `context` must be byte-identical to the one every signer passed to
+    /// [`crate::EdDSASession::sign_round`]; see there for what it does and does not bind.
     ///
     /// # Errors
     /// Returns an error unless exactly one signature share is supplied for each contributing
     /// party.
     pub fn sign_agg(
         self,
-        session_id: Uuid,
+        context: &[u8],
         shares: &[EdDSASigShare],
         message: BaseField,
         public_key: EdDSAPublicKey,
@@ -83,7 +84,7 @@ impl EdDSACommitments {
         }
         let (r, _) =
             crate::internal::binding::combine_two_nonce_randomness(CombineTwoNonceRandomnessArgs {
-                session_id,
+                context,
                 message,
                 public_key,
                 d: self.d,
@@ -98,7 +99,9 @@ impl EdDSACommitments {
     /// each party's contribution individually so that malformed shares can be attributed.
     ///
     /// Signature shares and nonce commitments carry party IDs. Public-key shares are keyed by ID.
-    /// Lagrange coefficients are derived internally.
+    /// Lagrange coefficients are derived internally. The opaque `context` must be byte-identical
+    /// to the one every signer passed to [`crate::EdDSASession::sign_round`]; a signer that used a
+    /// different context produces an invalid share and is blamed here.
     ///
     /// # Errors
     /// Returns [`IdentifiableAbortError::MaliciousParties`] with the IDs of all parties whose
@@ -110,7 +113,7 @@ impl EdDSACommitments {
     /// validated and no participant may be accused.
     pub fn sign_agg_with_identifiable_abort(
         self,
-        session_id: Uuid,
+        context: &[u8],
         shares: &[EdDSASigShare],
         message: BaseField,
         public_key: &EdDSAPublicKey,
@@ -175,7 +178,7 @@ impl EdDSACommitments {
 
         let (r, b) =
             crate::internal::binding::combine_two_nonce_randomness(CombineTwoNonceRandomnessArgs {
-                session_id,
+                context,
                 message,
                 public_key: public_key.to_owned(),
                 d: self.d,

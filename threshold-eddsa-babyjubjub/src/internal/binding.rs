@@ -1,11 +1,14 @@
 //! Two-Nonce Combination for Threshold `EdDSA`
 //!
 //! This module derives the full signing randomness `r = d + e*b` from the aggregated two-nonce
-//! commitments, where the binding factor `b` is a hash over the session ID, the contributing
-//! parties, the public key, both nonce commitments, and the message.
+//! commitments, where the binding factor `b` is a hash over the caller-supplied context, the
+//! contributing parties, the public key, both nonce commitments, and the message.
 //!
 //! Binding the randomness to all of these inputs is what makes concurrent signing sessions safe,
-//! as required by Frost3.
+//! as required by Frost3. Frost3's security does not rely on the context: the fresh nonce
+//! commitments already make the preimage unique per session. The context is an agreement check —
+//! participants that disagree on it derive different binding factors, so the session aborts
+//! instead of producing a signature.
 
 use crate::{Affine, BaseField, ScalarField};
 use ark_ec::CurveGroup;
@@ -13,12 +16,11 @@ use ark_ff::PrimeField;
 use ark_serialize::CanonicalSerialize;
 use eddsa_babyjubjub::EdDSAPublicKey;
 use std::num::NonZeroU16;
-use uuid::Uuid;
 
 pub(crate) const FROST_3_NONCE_COMBINER_LABEL: &[u8] = b"FROST_3_NONCE_COMBINER";
 
 pub(crate) struct CombineTwoNonceRandomnessArgs<'a> {
-    pub(crate) session_id: Uuid,
+    pub(crate) context: &'a [u8],
     pub(crate) message: BaseField,
     pub(crate) public_key: EdDSAPublicKey,
     pub(crate) d: Affine,
@@ -36,7 +38,7 @@ pub(crate) fn combine_two_nonce_randomness(
     args: CombineTwoNonceRandomnessArgs<'_>,
 ) -> (Affine, ScalarField) {
     let CombineTwoNonceRandomnessArgs {
-        session_id,
+        context,
         message,
         public_key,
         d,
@@ -45,9 +47,15 @@ pub(crate) fn combine_two_nonce_randomness(
     } = args;
     let mut hasher = blake3::Hasher::new();
     hasher.update(FROST_3_NONCE_COMBINER_LABEL);
-    hasher.update(session_id.as_bytes());
-    // The signer set is the only variable-length field in the preimage, so it is length-prefixed:
-    // without the prefix, injectivity would rely on every following field staying fixed-width.
+    // The context and the signer set are the variable-length fields in the preimage, so each is
+    // length-prefixed: without the prefixes, injectivity would rely on every following field
+    // staying fixed-width.
+    hasher.update(
+        &u64::try_from(context.len())
+            .expect("context length fits into u64")
+            .to_be_bytes(),
+    );
+    hasher.update(context);
     hasher.update(
         &u64::try_from(parties.len())
             .expect("signer set length fits into u64")

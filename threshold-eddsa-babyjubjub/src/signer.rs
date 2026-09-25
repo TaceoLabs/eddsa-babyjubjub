@@ -17,7 +17,6 @@ use ark_serde_compat::babyjubjub;
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroU16;
-use uuid::Uuid;
 use zeroize::ZeroizeOnDrop;
 
 /// Per-party commitments to the distributed `EdDSA` signature protocol.
@@ -106,13 +105,20 @@ impl EdDSASession {
     /// share rather than taken as arguments, so the signer never signs against a committee or a key
     /// it cannot check.
     ///
+    /// The opaque `context` is mixed into the nonce-binding hash and must be byte-identical across
+    /// all signers and the aggregator of one session — a mismatched participant produces an invalid
+    /// share and is blamed by [`EdDSACommitments::sign_agg_with_identifiable_abort`]. Use it to
+    /// bind the session to application data such as a unique session identifier. It is *not*
+    /// verifier-visible domain separation: the final signature is a plain `EdDSA` signature over
+    /// the message and verifies regardless of the context it was produced under.
+    ///
     /// # Errors
     /// Returns an error if the key-share metadata is invalid, the signing set is non-canonical,
     /// outside the key's committee, or smaller than its threshold, or the nonce session, key share,
     /// and signing set do not identify the same party.
     pub fn sign_round(
         self,
-        session_id: Uuid,
+        context: &[u8],
         x_share: &DLogShareShamir,
         message: BaseField,
         challenge_input: EdDSACommitments,
@@ -153,7 +159,7 @@ impl EdDSASession {
         // Recombine the two-nonce randomness shares into the full randomness used in the challenge.
         let (r, b) =
             crate::internal::binding::combine_two_nonce_randomness(CombineTwoNonceRandomnessArgs {
-                session_id,
+                context,
                 message,
                 public_key: public_key.clone(),
                 d,

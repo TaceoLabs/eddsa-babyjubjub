@@ -10,7 +10,6 @@ use ark_ff::{One, UniformRand, Zero};
 use eddsa_babyjubjub::EdDSAPublicKey;
 use rand::{CryptoRng, Rng, seq::IteratorRandom};
 use std::{collections::BTreeMap, num::NonZeroU16};
-use uuid::Uuid;
 
 /// Reconstructs a curve point from its Shamir shares and lagrange coefficients.
 fn reconstruct_point<C: CurveGroup>(shares: &[C::Affine], lagrange: &[C::ScalarField]) -> C {
@@ -82,8 +81,8 @@ pub(crate) fn test_threshold_eddsa_inner<R: Rng + CryptoRng>(
     public_key_shares: &[Affine],
     rng: &mut R,
 ) {
-    // Crete session and choose the used set of parties
-    let session_id = Uuid::new_v4();
+    // Create the session context and choose the used set of parties
+    let context: &[u8] = b"threshold-eddsa-tests: shared driver session";
     let used_parties = (1..=u16::try_from(num_parties).expect("Fits into u16"))
         .map(nz)
         .choose_multiple(rng, degree + 1);
@@ -117,7 +116,7 @@ pub(crate) fn test_threshold_eddsa_inner<R: Rng + CryptoRng>(
             .expect("have not used this session before");
         let x_ = &x_shares[usize::from(server_idx.get()) - 1];
         let proof = session
-            .sign_round(session_id, x_, message, challenge.clone())
+            .sign_round(context, x_, message, challenge.clone())
             .expect("valid signing package");
         used_sigs.push(proof);
     }
@@ -135,12 +134,12 @@ pub(crate) fn test_threshold_eddsa_inner<R: Rng + CryptoRng>(
     // Without identifiable abort
     let signature_noabort = challenge
         .clone()
-        .sign_agg(session_id, &used_sigs, message, public_key.clone())
+        .sign_agg(context, &used_sigs, message, public_key.clone())
         .expect("signature shares match the signing set");
 
     // With identifiable abort
     let result = challenge.sign_agg_with_identifiable_abort(
-        session_id,
+        context,
         &used_sigs,
         message,
         public_key,
@@ -220,6 +219,76 @@ fn test_threshold_eddsa_shamir_identifies_cheating_parties() {
     test_threshold_eddsa(7, 3, &[0, 2]);
 }
 
+/// The opaque context is an agreement check on the binding factor: a signer that derives its share
+/// under a different context produces an invalid share, so plain aggregation yields a signature
+/// that does not verify and identifiable abort blames exactly that signer.
+#[test]
+fn context_mismatch_aborts_and_blames_the_mismatched_signer() {
+    let mut rng = rand::thread_rng();
+    let message = BaseField::rand(&mut rng);
+    let x = ScalarField::rand(&mut rng);
+    let public_key = EdDSAPublicKey {
+        pk: (Affine::generator() * x).into_affine(),
+    };
+    let x_shares = share(x, &public_key, 2, 1, &mut rng);
+
+    let mut sessions = Vec::new();
+    let mut commitments = Vec::new();
+    for party_id in 1..=2 {
+        let (session, comm) = EdDSASession::pre_round(nz(party_id), &mut rng);
+        sessions.push(session);
+        commitments.push(comm);
+    }
+    let challenge = EdDSACommitments::pre_agg(&commitments).expect("valid commitment set");
+
+    let contexts: [&[u8]; 2] = [b"session context", b"a different session context"];
+    let sig_shares = sessions
+        .into_iter()
+        .zip(&x_shares)
+        .zip(contexts)
+        .map(|((session, x_share), context)| {
+            session
+                .sign_round(context, x_share, message, challenge.clone())
+                .expect("valid signing package")
+        })
+        .collect::<Vec<_>>();
+
+    let signature = challenge
+        .clone()
+        .sign_agg(contexts[0], &sig_shares, message, public_key.clone())
+        .expect("plain aggregation only combines shares");
+    assert!(
+        !public_key.verify(message, &signature),
+        "a share derived under a mismatched context must not yield a valid signature"
+    );
+
+    let public_key_shares = x_shares
+        .iter()
+        .map(|x_share| {
+            (
+                x_share.party_id(),
+                (Affine::generator() * x_share.value).into_affine(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    match challenge.sign_agg_with_identifiable_abort(
+        contexts[0],
+        &sig_shares,
+        message,
+        &public_key,
+        &public_key_shares,
+        &commitments,
+    ) {
+        Err(error) => assert_eq!(
+            error
+                .into_malicious_parties()
+                .expect("the abort must attribute blame, not report bad input"),
+            vec![nz(2)],
+        ),
+        Ok(_) => panic!("a mismatched context must abort the aggregation"),
+    }
+}
+
 /// A duplicated signature-share party ID must be rejected as invalid input. Silently collapsing
 /// duplicates (last one wins) would let a forged duplicate replace the honest share and get the
 /// honest party blamed by the identifiable-abort path.
@@ -232,7 +301,7 @@ fn aggregation_rejects_duplicate_signature_shares() {
         pk: (Affine::generator() * x).into_affine(),
     };
     let x_shares = share(x, &public_key, 3, 1, &mut rng);
-    let session_id = Uuid::new_v4();
+    let context: &[u8] = b"threshold-eddsa-tests: duplicate shares";
 
     let mut sessions = Vec::new();
     let mut commitments = Vec::new();
@@ -248,7 +317,7 @@ fn aggregation_rejects_duplicate_signature_shares() {
         .zip(&x_shares)
         .map(|(session, x_share)| {
             session
-                .sign_round(session_id, x_share, message, challenge.clone())
+                .sign_round(context, x_share, message, challenge.clone())
                 .expect("valid signing package")
         })
         .collect::<Vec<_>>();
@@ -260,7 +329,7 @@ fn aggregation_rejects_duplicate_signature_shares() {
 
     let Err(_) = challenge
         .clone()
-        .sign_agg(session_id, &sig_shares, message, public_key.clone())
+        .sign_agg(context, &sig_shares, message, public_key.clone())
     else {
         panic!("duplicate signature-share party IDs must be rejected");
     };
@@ -275,7 +344,7 @@ fn aggregation_rejects_duplicate_signature_shares() {
         })
         .collect::<BTreeMap<_, _>>();
     match challenge.sign_agg_with_identifiable_abort(
-        session_id,
+        context,
         &sig_shares,
         message,
         &public_key,
@@ -303,7 +372,7 @@ fn identifiable_abort_rejects_malformed_public_key_shares_as_invalid_input() {
         pk: (Affine::generator() * x).into_affine(),
     };
     let x_shares = share(x, &public_key, 2, 1, &mut rng);
-    let session_id = Uuid::new_v4();
+    let context: &[u8] = b"threshold-eddsa-tests: malformed public-key shares";
 
     let mut sessions = Vec::new();
     let mut commitments = Vec::new();
@@ -318,7 +387,7 @@ fn identifiable_abort_rejects_malformed_public_key_shares_as_invalid_input() {
         .zip(&x_shares)
         .map(|(session, x_share)| {
             session
-                .sign_round(session_id, x_share, message, challenge.clone())
+                .sign_round(context, x_share, message, challenge.clone())
                 .expect("valid signing package")
         })
         .collect::<Vec<_>>();
@@ -339,7 +408,7 @@ fn identifiable_abort_rejects_malformed_public_key_shares_as_invalid_input() {
     public_key_shares.insert(nz(1), tampered);
 
     match challenge.sign_agg_with_identifiable_abort(
-        session_id,
+        context,
         &sig_shares,
         message,
         &public_key,
@@ -390,7 +459,7 @@ fn signer_rejects_mismatched_identity_and_insufficient_sets() {
         nz(1),
     )
     .expect("valid metadata for another party");
-    let Err(_) = session.sign_round(Uuid::new_v4(), &other_party_share, message, aggregate) else {
+    let Err(_) = session.sign_round(b"context", &other_party_share, message, aggregate) else {
         panic!("a nonce session must not sign for another key-share identity");
     };
 
@@ -405,12 +474,8 @@ fn signer_rejects_mismatched_identity_and_insufficient_sets() {
         nz(2),
     )
     .expect("valid two-party threshold metadata");
-    let Err(_) = session.sign_round(
-        Uuid::new_v4(),
-        &two_party_threshold_share,
-        message,
-        aggregate,
-    ) else {
+    let Err(_) = session.sign_round(b"context", &two_party_threshold_share, message, aggregate)
+    else {
         panic!("a signer must reject a set below its bound threshold");
     };
 }
