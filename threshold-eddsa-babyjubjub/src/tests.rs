@@ -562,3 +562,36 @@ fn key_share_deserialization_enforces_its_binding() {
         panic!("a share must not be bound to a small-order public key");
     };
 }
+
+/// The `Debug` implementations of secret-holding types must redact the secrets so they cannot
+/// leak through logs, while still printing the public metadata.
+#[test]
+fn debug_output_redacts_secrets() {
+    let mut rng = rand::thread_rng();
+    let secret = ScalarField::rand(&mut rng);
+    let public_key = EdDSAPublicKey {
+        pk: (Affine::generator() * secret).into_affine(),
+    };
+    let share = DLogShareShamir::new(secret, &public_key, nz(2), nz(3), nz(2))
+        .expect("valid share metadata");
+    let printed = format!("{share:?}");
+    assert!(
+        !printed.contains(&share.value.to_string()),
+        "the secret share must not appear in the debug output"
+    );
+    assert!(
+        printed.contains("<redacted>") && printed.contains("party_id"),
+        "the debug output must redact the secret but keep the public metadata"
+    );
+
+    let (session, _) = EdDSASession::pre_round(nz(1), &mut rng);
+    let printed = format!("{session:?}");
+    assert!(
+        !printed.contains(&session.d.to_string()) && !printed.contains(&session.e.to_string()),
+        "the secret nonces must not appear in the debug output"
+    );
+    assert!(
+        printed.contains("<redacted>") && printed.contains("party_id"),
+        "the debug output must redact the secrets but keep the public metadata"
+    );
+}

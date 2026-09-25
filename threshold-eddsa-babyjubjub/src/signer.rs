@@ -5,7 +5,7 @@
 //! with the two messages a signer emits: the `PartialEdDSACommitments` commitment share sent to
 //! the aggregator in the pre-round, and the `EdDSASigShare` produced in the sign round.
 //!
-//! Secret randomness is never clonable, and session types deliberately do not implement `Debug` to avoid accidental leakage.
+//! Secret randomness is never clonable, and the `Debug` implementation of session types redacts it to avoid accidental leakage.
 
 use crate::{
     Affine, BaseField, ScalarField, aggregator::EdDSACommitments,
@@ -61,10 +61,11 @@ impl EdDSASigShare {
 
 /// The internal storage of a party in a distributed `EdDSA` protocol.
 ///
-/// Stores non-clonable, non-debug secret state for a threshold party during the `EdDSA` protocol,
+/// Stores non-clonable secret state for a threshold party during the `EdDSA` protocol,
 /// used to generate the commitment share and construct the signature share.
 ///
-/// This is not `Clone` because it contains secret randomness that may only be used once. We also don't implement `Debug` so we do don't print it by accident.
+/// This is not `Clone` because it contains secret randomness that may only be used once. The
+/// `Debug` implementation redacts the secret nonces so they are not printed by accident.
 /// The `sign_round` method consumes the session.
 #[derive(ZeroizeOnDrop)]
 pub struct EdDSASession {
@@ -73,6 +74,16 @@ pub struct EdDSASession {
     pub(crate) party_id: NonZeroU16,
     pub(crate) d: ScalarField,
     pub(crate) e: ScalarField,
+}
+
+impl std::fmt::Debug for EdDSASession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EdDSASession")
+            .field("party_id", &self.party_id)
+            .field("d", &"<redacted>")
+            .field("e", &"<redacted>")
+            .finish()
+    }
 }
 
 impl EdDSASession {

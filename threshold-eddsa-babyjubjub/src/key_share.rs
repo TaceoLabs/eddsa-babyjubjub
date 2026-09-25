@@ -22,7 +22,7 @@ use zeroize::ZeroizeOnDrop;
 /// invariants as [`DLogShareShamir::new`].
 ///
 /// Serializable so it can be persisted via a secret manager.
-/// Not `Debug`/`Display` to avoid accidental leaks.
+/// The `Debug` implementation redacts the secret share; there is no `Display` to avoid accidental leaks.
 #[derive(Serialize, ZeroizeOnDrop)]
 pub struct DLogShareShamir {
     #[serde(with = "ark_serde_compat::field")]
@@ -37,6 +37,18 @@ pub struct DLogShareShamir {
     pub(crate) number_of_parties: NonZeroU16,
     #[zeroize(skip)]
     pub(crate) threshold: NonZeroU16,
+}
+
+impl std::fmt::Debug for DLogShareShamir {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DLogShareShamir")
+            .field("value", &"<redacted>")
+            .field("public_key", &self.public_key)
+            .field("party_id", &self.party_id)
+            .field("number_of_parties", &self.number_of_parties)
+            .field("threshold", &self.threshold)
+            .finish()
+    }
 }
 
 impl DLogShareShamir {
