@@ -4,6 +4,7 @@ members = [
     "ark-babyjubjub",
     "eddsa-babyjubjub",
     "poseidon2",
+    "threshold-eddsa-babyjubjub",
 ]
 
 [workspace.package]
