@@ -56,7 +56,7 @@ impl DLogShareShamir {
     ///
     /// # Errors
     /// Returns an error unless `value` is non-zero, the metadata satisfies
-    /// `party_id <= number_of_parties` and `threshold <= number_of_parties`, and `public_key`
+    /// `party_id <= number_of_parties` and `2 <= threshold <= number_of_parties`, and `public_key`
     /// is a non-zero point in the prime-order subgroup.
     pub fn new(
         value: ScalarField,
@@ -94,7 +94,7 @@ impl DLogShareShamir {
         if party_id > number_of_parties {
             eyre::bail!("party ID must lie in the Shamir party set");
         }
-        if threshold > number_of_parties {
+        if threshold.get() < 2 || threshold > number_of_parties {
             eyre::bail!("invalid Shamir threshold");
         }
         if public_key.is_zero() || public_key.check().is_err() {

@@ -112,7 +112,9 @@ signers                         aggregator
 
 Party IDs, the committee size, and the signing threshold are `NonZeroU16`
 values, so a zero ID is unrepresentable and rejected already during
-deserialization.
+deserialization. DKG parameters and signing key shares require `2 <= t <= n`;
+construction and deserialization reject threshold one, which would give every
+participant the complete signing key.
 
 We recommend limiting the total committee size `n` to **128 participants**,
 following the [FROST3 signing draft (BIP 445)](https://github.com/siv2r/bip-frost-signing#footnotes),
@@ -183,10 +185,10 @@ excluded or use a separately reviewed constant-time arithmetic backend.
 
 ## Distributed key generation
 
-`keygen::Parameters::new(n, t)` configures an `n`-party sharing whose polynomial
-degree is `t - 1`; any `t` resulting shares can sign. Note that the source
-protocol document uses `t` for the polynomial _degree_ instead, so its `t` maps
-to `Parameters::new(n, t + 1)` here.
+`keygen::Parameters::new(n, t)` requires `2 <= t <= n` and configures an `n`-party
+sharing whose polynomial degree is `t - 1`; any `t` resulting shares can sign.
+Note that the source protocol document uses `t` for the polynomial _degree_
+instead, so its `t` maps to `Parameters::new(n, t + 1)` here.
 
 Key generation takes an opaque session context (`context: &[u8]`) that must be
 globally unique per run, not merely agreed. The context is the only run-specific

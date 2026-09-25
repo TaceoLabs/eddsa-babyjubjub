@@ -93,6 +93,9 @@ impl<'de> Deserialize<'de> for Parameters {
         }
 
         let repr = Repr::deserialize(deserializer)?;
+        if repr.threshold.get() < 2 {
+            return Err(D::Error::custom("threshold must be at least two"));
+        }
         if repr.threshold > repr.number_of_parties {
             return Err(D::Error::custom(
                 "threshold must not exceed the number of parties",
@@ -116,9 +119,10 @@ impl Parameters {
     /// here.
     ///
     /// # Panics
-    /// Panics unless `threshold <= number_of_parties`.
+    /// Panics unless `2 <= threshold <= number_of_parties`.
     #[must_use]
     pub fn new(number_of_parties: NonZeroU16, threshold: NonZeroU16) -> Self {
+        assert!(threshold.get() >= 2, "Threshold must be at least two");
         assert!(
             threshold <= number_of_parties,
             "Threshold must not be larger than the number of parties"
