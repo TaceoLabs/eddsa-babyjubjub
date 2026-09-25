@@ -9,6 +9,7 @@ These signatures are friendly to verify in SNARK systems working over the BN254 
 * `ark-serde-compat`: A few helper functions for serializing arkworks types with serde.
 * `eddsa-babyjubjub`: An implementation of EdDSA over the BabyJubJub curve.
 * `poseidon2`: An implementation of the SNARK-friendly Poseidon2 hash function over the BN254 scalar field.
+* `threshold-eddsa-babyjubjub`: A threshold implementation of `eddsa-babyjubjub` using Frost3.
 
 Since there is no namespace support on crates.io, the above crates are published with a `taceo-` prefix, to not add confusion whether these belong to the arkworks ecosystem or not (e.g., `taceo-ark-babyjubjub`).
 This might change in the future, once namespaces are available.
