@@ -17,7 +17,7 @@ ark-ec = { workspace = true }
 ark-ff = { workspace = true }
 ark-serde-compat = { workspace = true }
 ark-serialize = { workspace = true, features = ["serde"] }
-eddsa-babyjubjub = { workspace = true }
+eddsa-babyjubjub = { package = "taceo-eddsa-babyjubjub", path = "../eddsa-babyjubjub", version = "0.6.0" }
 eyre = { workspace = true }
 itertools = { workspace = true }
 rand = { workspace = true }

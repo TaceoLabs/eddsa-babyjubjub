@@ -28,7 +28,6 @@ ark-serde-compat = { package = "taceo-ark-serde-compat", version = "0.6", defaul
 ark-serialize = { version = "0.6", default-features = false }
 ark-std = "0.6"
 blake3 = "1"
-eddsa-babyjubjub = { package = "taceo-eddsa-babyjubjub", path = "eddsa-babyjubjub" }
 eyre = "0.6"
 itertools = "0.15"
 num-bigint = "0.4"
