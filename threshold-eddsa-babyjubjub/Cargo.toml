@@ -20,11 +20,10 @@ ark-serialize = { workspace = true, features = ["serde"] }
 eddsa-babyjubjub = { workspace = true }
 eyre = { workspace = true }
 itertools = { workspace = true }
-num-bigint = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
-uuid = { workspace = true, features = ["v4", "serde"] }
+uuid = { workspace = true, features = ["serde"] }
 zeroize = { workspace = true }
 
 [lints]
@@ -35,3 +34,5 @@ default = []
 
 [dev-dependencies]
 serde_json = "1"
+# The tests generate random session IDs; the library itself only consumes caller-supplied UUIDs.
+uuid = { workspace = true, features = ["v4"] }

@@ -11,12 +11,11 @@ use crate::{
     signature::EdDSASigShare,
 };
 use ark_ec::{AffineRepr, CurveGroup};
-use ark_ff::{AdditiveGroup, PrimeField, Zero};
+use ark_ff::{AdditiveGroup, Zero};
 use ark_serde_compat::babyjubjub;
 use ark_serialize::Valid;
 use eddsa_babyjubjub::{EdDSAPublicKey, EdDSASignature};
 use itertools::izip;
-use num_bigint::BigUint;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use std::{collections::BTreeMap, num::NonZeroU16};
 use uuid::Uuid;
@@ -315,18 +314,16 @@ impl<'de> Deserialize<'de> for EdDSACommitments {
     }
 }
 
-// This is modelled after the `verify` function in `eddsa-babyjubjub/src/lib.rs`, but it takes the challenge as input
+// This is modelled after the `verify` function in `eddsa-babyjubjub/src/lib.rs`, but it takes the
+// challenge as input. The range check on `s` from that function is omitted: `s` is a
+// `ScalarField` element here, so it is canonical by construction, and there is no circom
+// counterpart to mirror.
 pub(crate) fn verify_for_identifiable_abort(
     pk: &Affine,
     r: Affine,
     s: ScalarField,
     c: ScalarField,
 ) -> bool {
-    let s_biguint: BigUint = s.into();
-    if s_biguint >= ScalarField::MODULUS.into() {
-        return false;
-    }
-
     if pk.is_zero()
         || !pk.is_on_curve()
         || !pk.is_in_correct_subgroup_assuming_on_curve()
