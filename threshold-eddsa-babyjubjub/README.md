@@ -122,9 +122,9 @@ signers                         aggregator
 
 Party IDs, the committee size, and the signing threshold are `NonZeroU16`
 values, so a zero ID is unrepresentable and rejected already during
-deserialization. DKG parameters and signing key shares require `2 <= t <= n`;
-construction and deserialization reject threshold one, which would give every
-participant the complete signing key.
+deserialization. DKG parameters, both old and new resharing parameters, and
+signing key shares require `2 <= t <= n`; construction and deserialization
+reject threshold one, which would give every participant the complete signing key.
 
 We recommend limiting the total committee size `n` to **128 participants**,
 following the [FROST3 signing draft (BIP 445)](https://github.com/siv2r/bip-frost-signing#footnotes),
@@ -245,7 +245,8 @@ randomness require a protocol designed for that guarantee.
 
 Resharing replaces the Shamir sharing while preserving the secret key and
 public key. It can change `n`, change `t`, rotate participants, or refresh shares
-for the same configuration.
+for the same configuration. Both the old and new `Parameters` require
+`2 <= t <= n`.
 
 > [!WARNING]
 > Resharing does not cryptographically revoke or erase the old shares. During
