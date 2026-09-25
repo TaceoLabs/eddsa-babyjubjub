@@ -30,13 +30,22 @@ taceo-threshold-eddsa-babyjubjub = "0.1"
 
 ## Network requirements
 
-The protocol APIs operate on already-delivered messages. Bind the externally
-authenticated sender identity to the `from` argument; never trust an ID carried
-only by an unauthenticated transport.
+The protocol APIs operate on already-delivered messages and identify senders
+only by the party ID embedded in each message. That ID is a self-claimed field:
+before passing a commitment or signature share to the aggregation APIs, check
+that its `party_id()` equals the identity the transport authenticated. Never
+trust an ID carried only by an unauthenticated transport — a message accepted
+under the wrong ID lets its sender speak, and be blamed, as someone else.
 
 | Protocol step | Required channel | Why |
 | --- | --- | --- |
 | FROST3 preprocessing commitments and signature shares | **Authenticated signer-to-aggregator communication** | The aggregator must attribute each contribution to the correct signer. Reliable broadcast is not required for the signing flow implemented here. |
+| Signing requests (session ID, signer set, aggregate commitments, message) | **Authenticated aggregator-to-signer communication** | Blame from `sign_agg_with_identifiable_abort` is sound only if every signer received exactly the inputs the aggregator later verifies against. A tampered request makes the honest recipient's share fail validation, so the honest signer is blamed. |
+
+Neither commitments nor signature shares carry a session binding of their own,
+so the authenticated channels must also be replay-protected and bound to the
+signing session: a share replayed from another session fails validation and its
+honest author is blamed.
 
 Protocol deserializers cap participant-sized collections at the largest count
 representable by a `u16`. This is a defense-in-depth limit, not a network frame
