@@ -81,7 +81,8 @@ impl<C: CurveGroup> ReShareProtocolReceiver<C> {
 
         Ok(ReShareProtocolReceiver {
             my_idx,
-            received_shares: ReceivedShares(HashMap::new()),
+            // Avoid reallocations that leave unwiped secret shares in freed storage.
+            received_shares: ReceivedShares(HashMap::with_capacity(reshare_senders.senders.len())),
             reshare_senders,
             context: context.to_vec(),
         })
