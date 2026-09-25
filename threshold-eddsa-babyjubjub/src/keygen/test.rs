@@ -241,6 +241,11 @@ fn test_keygen_7_4() {
 }
 
 #[test]
+fn test_keygen_and_sign_2_2() {
+    test_keygen_and_sign(2, 2, &[]);
+}
+
+#[test]
 fn test_keygen_and_sign_3_2() {
     test_keygen_and_sign(3, 2, &[]);
 }
@@ -256,11 +261,27 @@ fn test_keygen_and_sign_identifies_cheating_parties() {
 }
 
 #[test]
+fn parameters_reject_threshold_one_on_construction() {
+    for number_of_parties in [1, 3] {
+        let Err(_) = std::panic::catch_unwind(|| Parameters::new(nz(number_of_parties), nz(1)))
+        else {
+            panic!("threshold one must be rejected for {number_of_parties} parties");
+        };
+    }
+}
+
+#[test]
 fn parameters_reject_invalid_deserialization() {
     let Err(_) = serde_json::from_str::<Parameters>(r#"{"number_of_parties":3,"threshold":0}"#)
     else {
         panic!("zero threshold must be rejected");
     };
+    for number_of_parties in [1, 3] {
+        let encoded = serde_json::json!({"number_of_parties": number_of_parties, "threshold": 1});
+        let Err(_) = serde_json::from_value::<Parameters>(encoded) else {
+            panic!("threshold one must be rejected for {number_of_parties} parties");
+        };
+    }
     let Err(_) = serde_json::from_str::<Parameters>(r#"{"number_of_parties":2,"threshold":3}"#)
     else {
         panic!("threshold above the party count must be rejected");

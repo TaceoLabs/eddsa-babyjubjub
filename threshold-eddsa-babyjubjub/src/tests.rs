@@ -482,14 +482,15 @@ fn signer_rejects_mismatched_identity_and_insufficient_sets() {
     };
 
     let (session, commitment) = EdDSASession::pre_round(nz(1), &mut rng);
+    let (_, other_commitment) = EdDSASession::pre_round(nz(2), &mut rng);
     let aggregate =
-        EdDSACommitments::pre_agg(&[commitment]).expect("valid single-party commitment set");
+        EdDSACommitments::pre_agg(&[commitment, other_commitment]).expect("valid commitment set");
     let other_party_share = DLogShareShamir::new(
         ScalarField::rand(&mut rng),
         &public_key,
         nz(2),
         nz(2),
-        nz(1),
+        nz(2),
     )
     .expect("valid metadata for another party");
     let Err(_) = session.sign_round(b"context", &other_party_share, message, aggregate) else {
@@ -499,7 +500,7 @@ fn signer_rejects_mismatched_identity_and_insufficient_sets() {
     let (session, commitment) = EdDSASession::pre_round(nz(1), &mut rng);
     let aggregate =
         EdDSACommitments::pre_agg(&[commitment]).expect("valid single-party commitment set");
-    let two_party_threshold_share = DLogShareShamir::new(
+    let mut two_party_threshold_share = DLogShareShamir::new(
         ScalarField::rand(&mut rng),
         &public_key,
         nz(1),
@@ -511,6 +512,30 @@ fn signer_rejects_mismatched_identity_and_insufficient_sets() {
     else {
         panic!("a signer must reject a set below its bound threshold");
     };
+
+    // Defend against invalid metadata created inside the crate as well as at the public boundaries.
+    two_party_threshold_share.threshold = nz(1);
+    let (session, commitment) = EdDSASession::pre_round(nz(1), &mut rng);
+    let aggregate =
+        EdDSACommitments::pre_agg(&[commitment]).expect("valid single-party commitment set");
+    let Err(_) = session.sign_round(b"context", &two_party_threshold_share, message, aggregate)
+    else {
+        panic!("a signer must reject threshold-one key-share metadata");
+    };
+}
+
+#[test]
+fn key_share_rejects_threshold_one_on_construction() {
+    let secret = ScalarField::from(5_u64);
+    let public_key = EdDSAPublicKey {
+        pk: (Affine::generator() * secret).into_affine(),
+    };
+    for number_of_parties in [1, 3] {
+        let Err(_) = DLogShareShamir::new(secret, &public_key, nz(1), nz(number_of_parties), nz(1))
+        else {
+            panic!("threshold one must be rejected for {number_of_parties} parties");
+        };
+    }
 }
 
 /// Reject zero secret shares before signing, consistently with identifiable aggregation's
@@ -573,6 +598,9 @@ fn key_share_deserialization_enforces_its_binding() {
     };
     let Err(_) = tamper("threshold", 0.into()) else {
         panic!("a zero threshold must be rejected");
+    };
+    let Err(_) = tamper("threshold", 1.into()) else {
+        panic!("threshold one must be rejected");
     };
     let Err(_) = tamper("threshold", 4.into()) else {
         panic!("a threshold above the party count must be rejected");
