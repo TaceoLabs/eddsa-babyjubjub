@@ -9,7 +9,7 @@ use crate::{
     utils::{self, evaluate_poly},
 };
 use ark_ec::{AffineRepr, CurveGroup};
-use ark_ff::UniformRand;
+use ark_ff::{One, UniformRand, Zero};
 use eddsa_babyjubjub::EdDSAPublicKey;
 use rand::{CryptoRng, Rng, seq::IteratorRandom};
 use std::{collections::BTreeMap, num::NonZeroU16};
@@ -268,6 +268,70 @@ fn aggregation_rejects_duplicate_signature_shares() {
             "a duplicate share is inconsistent input, not proof that its author cheated"
         ),
         Ok(_) => panic!("duplicate signature-share party IDs must be rejected"),
+    }
+}
+
+/// A malformed public-key share is inconsistent aggregation input and must be reported as
+/// `InvalidInput`, never blamed on the party: the Lagrange reconstruction check cannot detect
+/// torsion components that cancel under even coefficients, and without up-front validation the
+/// per-share check would misattribute them as cheating.
+#[test]
+fn identifiable_abort_rejects_malformed_public_key_shares_as_invalid_input() {
+    let mut rng = rand::thread_rng();
+    let message = BaseField::rand(&mut rng);
+    let x = ScalarField::rand(&mut rng);
+    let public_key = EdDSAPublicKey {
+        pk: (Affine::generator() * x).into_affine(),
+    };
+    let x_shares = share(x, &public_key, 2, 1, &mut rng);
+    let session_id = Uuid::new_v4();
+
+    let mut sessions = Vec::new();
+    let mut commitments = Vec::new();
+    for party_id in 1..=2 {
+        let (session, comm) = EdDSASession::pre_round(nz(party_id), &mut rng);
+        sessions.push(session);
+        commitments.push(comm);
+    }
+    let challenge = EdDSACommitments::pre_agg(&commitments).expect("valid commitment set");
+    let sig_shares = sessions
+        .into_iter()
+        .zip(&x_shares)
+        .map(|(session, x_share)| {
+            session
+                .sign_round(session_id, x_share, message, challenge.clone())
+                .expect("valid signing package")
+        })
+        .collect::<Vec<_>>();
+
+    // Over the signing set {1, 2}, party 1's Lagrange coefficient is 2, so an order-2 torsion
+    // component added to X_1 cancels out of the public-key reconstruction check.
+    let torsion = Affine::new_unchecked(BaseField::zero(), -BaseField::one());
+    let mut public_key_shares = x_shares
+        .iter()
+        .map(|x_share| {
+            (
+                x_share.party_id(),
+                (Affine::generator() * x_share.value).into_affine(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let tampered = (public_key_shares[&nz(1)].into_group() + torsion).into_affine();
+    public_key_shares.insert(nz(1), tampered);
+
+    match challenge.sign_agg_with_identifiable_abort(
+        session_id,
+        &sig_shares,
+        message,
+        &public_key,
+        &public_key_shares,
+        &commitments,
+    ) {
+        Err(error) => assert!(
+            error.malicious_parties().is_none(),
+            "a malformed public-key share is inconsistent input, not proof that a party cheated"
+        ),
+        Ok(_) => panic!("a malformed public-key share must abort the aggregation"),
     }
 }
 

@@ -103,9 +103,10 @@ impl EdDSACommitments {
     /// Returns [`IdentifiableAbortError::MaliciousParties`] with the IDs of all parties whose
     /// signature share does not verify against their commitment and their Lagrange-weighted share of
     /// the public key. Returns [`IdentifiableAbortError::InvalidInput`] when the supplied shares,
-    /// commitments, or public-key shares do not match the contributing party set, do not sum to the
-    /// stored aggregate, or do not reconstruct the public key — in that case no share was validated
-    /// and no participant may be accused.
+    /// commitments, or public-key shares do not match the contributing party set, when a public-key
+    /// share is not a non-zero point in the prime-order subgroup, or when the inputs do not sum to
+    /// the stored aggregate or do not reconstruct the public key — in these cases no share was
+    /// validated and no participant may be accused.
     pub fn sign_agg_with_identifiable_abort(
         self,
         session_id: Uuid,
@@ -132,6 +133,18 @@ impl EdDSACommitments {
             return Err(
                 eyre::eyre!("public-key shares do not match the contributing party set").into(),
             );
+        }
+        // Validate the caller-supplied public-key shares before any share is checked: a zero or
+        // out-of-subgroup share would fail the per-share verification and be misattributed as
+        // cheating, and torsion components can cancel out of the reconstruction check below.
+        if x_share_commitments
+            .values()
+            .any(|point| point.is_zero() || point.check().is_err())
+        {
+            return Err(eyre::eyre!(
+                "public-key shares must be non-zero points in the prime-order subgroup"
+            )
+            .into());
         }
         let lagrange_coefficients = self
             .contributing_parties
