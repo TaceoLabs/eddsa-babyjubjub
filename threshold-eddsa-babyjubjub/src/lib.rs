@@ -18,6 +18,7 @@ pub mod aggregator;
 pub mod error;
 mod internal;
 pub mod key_share;
+pub mod keygen;
 pub mod signer;
 #[cfg(test)]
 mod tests;
