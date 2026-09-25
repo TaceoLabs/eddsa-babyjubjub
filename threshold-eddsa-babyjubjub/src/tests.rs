@@ -6,7 +6,7 @@ use crate::{
     internal::lagrange::{evaluate_poly, lagrange_from_coeff},
 };
 use ark_ec::{AffineRepr, CurveGroup};
-use ark_ff::{One, UniformRand, Zero};
+use ark_ff::{One, PrimeField, UniformRand, Zero};
 use eddsa_babyjubjub::EdDSAPublicKey;
 use rand::{CryptoRng, Rng, seq::IteratorRandom};
 use std::{collections::BTreeMap, num::NonZeroU16};
@@ -17,7 +17,40 @@ fn reconstruct_point<C: CurveGroup>(shares: &[C::Affine], lagrange: &[C::ScalarF
     C::msm_unchecked(shares, lagrange)
 }
 
-fn reconstruct_random_pointshares<C: CurveGroup, R: Rng>(
+/// Recovers the secret by combining shares with Lagrange coefficients.
+///
+/// # Panics
+/// If provided shares and lagrange coefficients are not same length
+pub(crate) fn reconstruct<F: PrimeField>(shares: &[F], lagrange: &[F]) -> F {
+    assert_eq!(
+        shares.len(),
+        lagrange.len(),
+        "Shares and lagrange coeffs must be same length"
+    );
+    let mut res = F::zero();
+    for (s, l) in shares.iter().zip(lagrange.iter()) {
+        res += *s * l;
+    }
+    res
+}
+
+/// Reconstructs the secret from a random `degree + 1`-sized subset of the shares.
+pub(crate) fn reconstruct_random_shares<F: PrimeField, R: Rng>(
+    shares: &[F],
+    degree: usize,
+    rng: &mut R,
+) -> F {
+    let num_parties = shares.len();
+    let parties = (1..=num_parties as u64).choose_multiple(rng, degree + 1);
+    let shares = parties
+        .iter()
+        .map(|&i| shares[usize::try_from(i - 1).expect("Fits into usize")])
+        .collect::<Vec<_>>();
+    let lagrange = lagrange_from_coeff(&parties);
+    reconstruct(&shares, &lagrange)
+}
+
+pub(crate) fn reconstruct_random_pointshares<C: CurveGroup, R: Rng>(
     shares: &[C],
     degree: usize,
     rng: &mut R,
@@ -34,7 +67,7 @@ fn reconstruct_random_pointshares<C: CurveGroup, R: Rng>(
     reconstruct_point(&shares, &lagrange)
 }
 
-fn nz(id: u16) -> NonZeroU16 {
+pub(crate) fn nz(id: u16) -> NonZeroU16 {
     NonZeroU16::new(id).expect("party ID must be non-zero")
 }
 
@@ -449,14 +482,15 @@ fn signer_rejects_mismatched_identity_and_insufficient_sets() {
     };
 
     let (session, commitment) = EdDSASession::pre_round(nz(1), &mut rng);
+    let (_, other_commitment) = EdDSASession::pre_round(nz(2), &mut rng);
     let aggregate =
-        EdDSACommitments::pre_agg(&[commitment]).expect("valid single-party commitment set");
+        EdDSACommitments::pre_agg(&[commitment, other_commitment]).expect("valid commitment set");
     let other_party_share = DLogShareShamir::new(
         ScalarField::rand(&mut rng),
         &public_key,
         nz(2),
         nz(2),
-        nz(1),
+        nz(2),
     )
     .expect("valid metadata for another party");
     let Err(_) = session.sign_round(b"context", &other_party_share, message, aggregate) else {
@@ -466,7 +500,7 @@ fn signer_rejects_mismatched_identity_and_insufficient_sets() {
     let (session, commitment) = EdDSASession::pre_round(nz(1), &mut rng);
     let aggregate =
         EdDSACommitments::pre_agg(&[commitment]).expect("valid single-party commitment set");
-    let two_party_threshold_share = DLogShareShamir::new(
+    let mut two_party_threshold_share = DLogShareShamir::new(
         ScalarField::rand(&mut rng),
         &public_key,
         nz(1),
@@ -478,6 +512,30 @@ fn signer_rejects_mismatched_identity_and_insufficient_sets() {
     else {
         panic!("a signer must reject a set below its bound threshold");
     };
+
+    // Defend against invalid metadata created inside the crate as well as at the public boundaries.
+    two_party_threshold_share.threshold = nz(1);
+    let (session, commitment) = EdDSASession::pre_round(nz(1), &mut rng);
+    let aggregate =
+        EdDSACommitments::pre_agg(&[commitment]).expect("valid single-party commitment set");
+    let Err(_) = session.sign_round(b"context", &two_party_threshold_share, message, aggregate)
+    else {
+        panic!("a signer must reject threshold-one key-share metadata");
+    };
+}
+
+#[test]
+fn key_share_rejects_threshold_one_on_construction() {
+    let secret = ScalarField::from(5_u64);
+    let public_key = EdDSAPublicKey {
+        pk: (Affine::generator() * secret).into_affine(),
+    };
+    for number_of_parties in [1, 3] {
+        let Err(_) = DLogShareShamir::new(secret, &public_key, nz(1), nz(number_of_parties), nz(1))
+        else {
+            panic!("threshold one must be rejected for {number_of_parties} parties");
+        };
+    }
 }
 
 /// Reject zero secret shares before signing, consistently with identifiable aggregation's
@@ -540,6 +598,9 @@ fn key_share_deserialization_enforces_its_binding() {
     };
     let Err(_) = tamper("threshold", 0.into()) else {
         panic!("a zero threshold must be rejected");
+    };
+    let Err(_) = tamper("threshold", 1.into()) else {
+        panic!("threshold one must be rejected");
     };
     let Err(_) = tamper("threshold", 4.into()) else {
         panic!("a threshold above the party count must be rejected");

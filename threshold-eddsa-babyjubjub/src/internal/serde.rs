@@ -1,8 +1,10 @@
 use std::{fmt, marker::PhantomData};
 
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, CompressedChecked};
 use serde::{
-    Deserialize, Deserializer,
+    Deserialize, Deserializer, Serializer,
     de::{Error as _, SeqAccess, Visitor},
+    ser::{Error as _, SerializeSeq},
 };
 
 /// Party identifiers and protocol thresholds are represented as 16-bit (`NonZeroU16`) values,
@@ -57,6 +59,67 @@ where
     }
 }
 
+pub(crate) fn serialize_canonical_protocol_vec<S, T>(
+    values: &[T],
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+    T: CanonicalSerialize,
+{
+    if values.len() > MAX_PROTOCOL_PARTIES {
+        return Err(S::Error::custom("protocol collection exceeds u16 limit"));
+    }
+
+    let mut sequence = serializer.serialize_seq(Some(values.len()))?;
+    for value in values {
+        sequence.serialize_element(&CompressedChecked(value))?;
+    }
+    sequence.end()
+}
+
+pub(crate) fn deserialize_canonical_protocol_vec<'de, D, T>(
+    deserializer: D,
+) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: CanonicalDeserialize,
+{
+    deserializer.deserialize_seq(CanonicalVisitor(PhantomData))
+}
+
+struct CanonicalVisitor<T>(PhantomData<fn() -> T>);
+
+impl<'de, T> Visitor<'de> for CanonicalVisitor<T>
+where
+    T: CanonicalDeserialize,
+{
+    type Value = Vec<T>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "a sequence containing at most {MAX_PROTOCOL_PARTIES} canonical elements"
+        )
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        reject_oversized_hint(sequence.size_hint(), &self)?;
+
+        let mut values = Vec::new();
+        while let Some(CompressedChecked(value)) = sequence.next_element()? {
+            if values.len() == MAX_PROTOCOL_PARTIES {
+                return Err(A::Error::invalid_length(MAX_PROTOCOL_PARTIES + 1, &self));
+            }
+            values.push(value);
+        }
+        Ok(values)
+    }
+}
+
 fn reject_oversized_hint<E: serde::de::Error>(
     size_hint: Option<usize>,
     expected: &dyn serde::de::Expected,
@@ -70,14 +133,18 @@ fn reject_oversized_hint<E: serde::de::Error>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ScalarField;
 
     #[test]
     fn bounded_collection_deserializers_reject_oversized_sequences() {
         let oversized =
             serde_json::Value::Array(vec![serde_json::Value::from(1); MAX_PROTOCOL_PARTIES + 1]);
 
-        let Err(_) = deserialize_protocol_vec::<_, u16>(oversized) else {
+        let Err(_) = deserialize_protocol_vec::<_, u16>(oversized.clone()) else {
             panic!("an oversized protocol vector must be rejected");
+        };
+        let Err(_) = deserialize_canonical_protocol_vec::<_, ScalarField>(oversized) else {
+            panic!("an oversized canonical protocol vector must be rejected");
         };
     }
 }
