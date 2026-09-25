@@ -7,17 +7,13 @@ use crate::{
     internal::lagrange,
     keygen::{
         MaliciousPartyError, MessageError, MessageResult, Parameters, SecretScalarMap,
-        SecretScalars, blame::BlameRound, finished::Finished,
+        SecretScalars, finished::Finished,
     },
 };
 use ark_ec::CurveGroup;
-use ark_ff::Zero;
 use eyre::Result;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeSet, HashMap},
-    num::NonZeroU16,
-};
+use std::{collections::HashMap, num::NonZeroU16};
 
 /// The state of the DKG protocol in the second round.
 ///
@@ -31,8 +27,6 @@ pub struct RoundTwo<C: CurveGroup> {
     pub(crate) my_idx: NonZeroU16,
     pub(crate) params: Parameters,
     pub(crate) received_party_messages: SecretScalarMap<C::ScalarField>,
-    pub(crate) failed_parties: BTreeSet<NonZeroU16>,
-    pub(crate) disqualified_parties: BTreeSet<NonZeroU16>,
 }
 
 /// Communication in the second round of the DKG protocol.
@@ -54,18 +48,15 @@ impl<C: CurveGroup> RoundTwo<C> {
     /// Retrieve the communication for the second round to be sent *privately* to the party with index `for_party`.
     ///
     /// This has to be called for each other party participating in the protocol to retrieve the message intended for this party.
-    /// The message has to be sent using a private communication channel, and should not be available to other parties.
+    /// The channel must be confidential, authenticated, and bound to this DKG session and recipient.
+    /// Never publish this message in response to a complaint or timeout.
     ///
     /// # Errors
-    /// Returns an error if `for_party` is not a valid party index for the used [`Parameters`] or
-    /// if that party was disqualified in round one.
+    /// Returns an error if `for_party` is not a valid party index for the used [`Parameters`].
     pub fn get_party_communication(
         &self,
         for_party: NonZeroU16,
     ) -> Result<RoundTwoCommunication<C>> {
-        if self.disqualified_parties.contains(&for_party) {
-            eyre::bail!("party {for_party} was disqualified in round one");
-        }
         let idx = usize::from(for_party.get()) - 1;
         let secret_share = *self.secret_shares.get(idx).ok_or(eyre::eyre!(
             "party index {for_party} invalid for used parameters"
@@ -75,12 +66,12 @@ impl<C: CurveGroup> RoundTwo<C> {
     }
 
     /// Add a [`RoundTwoCommunication`] received from a party, verifying that everything is in order.
+    /// Abort the run if a share is invalid or does not arrive by the application's deadline.
     ///
     /// # Errors
     /// Returns [`MessageError::MaliciousParty`] if the secret share does not verify against the
     /// commitments the sender broadcast in round one; this attributes blame.
-    /// [`MessageError::LocalFault`] (invalid sender, unqualified dealer, duplicate delivery) does
-    /// not.
+    /// [`MessageError::LocalFault`] (invalid sender or duplicate delivery) does not.
     pub fn add_party_communication(
         &mut self,
         from: NonZeroU16,
@@ -99,35 +90,7 @@ impl<C: CurveGroup> RoundTwo<C> {
         Ok(())
     }
 
-    /// Add a private share while retaining malformed shares for the optional public blame round.
-    ///
-    /// Unlike [`RoundTwo::add_party_communication`], a share that fails its polynomial equation is
-    /// recorded as a complaint rather than returning [`MessageError::MaliciousParty`]. Structural
-    /// errors and duplicate messages still return an error.
-    ///
-    /// # Errors
-    /// Returns [`MessageError::LocalFault`] for an invalid sender or duplicate communication, which
-    /// does not attribute blame.
-    pub fn add_party_communication_for_blame(
-        &mut self,
-        from: NonZeroU16,
-        comm: &RoundTwoCommunication<C>,
-    ) -> MessageResult<()> {
-        self.validate_message(from)?;
-
-        if !lagrange::verify_polynomial_evaluation::<C>(
-            &self.commitments[&from],
-            self.my_idx,
-            &comm.secret_share,
-        ) {
-            self.failed_parties.insert(from);
-        }
-        self.received_party_messages.insert(from, comm.secret_share);
-        Ok(())
-    }
-
-    /// Checks shared by both intake paths: nothing here inspects the share itself, so no rejection
-    /// attributes blame.
+    /// Validate the sender and reject duplicate delivery before inspecting the share.
     fn validate_message(&self, from: NonZeroU16) -> MessageResult<()> {
         if from > self.params.number_of_parties {
             return Err(MessageError::local(format!(
@@ -137,11 +100,6 @@ impl<C: CurveGroup> RoundTwo<C> {
         if from == self.my_idx {
             return Err(MessageError::local(format!(
                 "do not add messages from own party {from}"
-            )));
-        }
-        if !self.commitments.contains_key(&from) {
-            return Err(MessageError::local(format!(
-                "party {from} is not a qualified dealer"
             )));
         }
         if self.received_party_messages.contains_key(&from) {
@@ -163,27 +121,6 @@ impl<C: CurveGroup> RoundTwo<C> {
             .collect()
     }
 
-    /// Turn an externally confirmed missing private share into a public complaint.
-    ///
-    /// The placeholder is never used as output: [`RoundTwo::finalize`] rejects unresolved
-    /// complaints and the blame round either replaces it with a valid revelation or disqualifies
-    /// the dealer.
-    ///
-    /// # Errors
-    /// Returns an error for an invalid dealer or if that dealer's share was already received.
-    pub fn complain_missing_party(&mut self, from: NonZeroU16) -> Result<()> {
-        if from == self.my_idx || !self.commitments.contains_key(&from) {
-            eyre::bail!("invalid dealer for a missing-share complaint");
-        }
-        if self.received_party_messages.contains_key(&from) {
-            eyre::bail!("dealer {from}'s private share was already received");
-        }
-        self.failed_parties.insert(from);
-        self.received_party_messages
-            .insert(from, C::ScalarField::zero());
-        Ok(())
-    }
-
     /// Indicates if the protocol is ready to advance into the next state.
     /// See [`RoundTwo::get_missing_parties`] for parties we are still missing information from.
     #[must_use]
@@ -200,9 +137,6 @@ impl<C: CurveGroup> RoundTwo<C> {
         if !self.can_advance() {
             eyre::bail!("cannot finalize, not all messages received");
         }
-        if !self.failed_parties.is_empty() {
-            eyre::bail!("cannot finalize with unresolved complaints; enter the blame round");
-        }
 
         let my_secret_key_share = self.received_party_messages.values().fold(
             self.secret_shares[usize::from(self.my_idx.get()) - 1],
@@ -213,11 +147,7 @@ impl<C: CurveGroup> RoundTwo<C> {
         let mut public_key_shares = HashMap::new();
         public_key_shares.insert(self.my_idx, my_public_key_share);
 
-        for party_idx in self
-            .params
-            .party_indices()
-            .filter(|party| !self.disqualified_parties.contains(party))
-        {
+        for party_idx in self.params.party_indices() {
             if party_idx == self.my_idx {
                 continue;
             }
@@ -244,13 +174,5 @@ impl<C: CurveGroup> RoundTwo<C> {
             pk_shares: public_key_shares,
             pk: public_key.into_affine(),
         })
-    }
-
-    /// Enter the optional public blame round after collecting every private share.
-    ///
-    /// # Errors
-    /// Returns an error unless all round-two communications have been collected.
-    pub fn blame_round(self) -> Result<BlameRound<C>> {
-        BlameRound::new(self)
     }
 }

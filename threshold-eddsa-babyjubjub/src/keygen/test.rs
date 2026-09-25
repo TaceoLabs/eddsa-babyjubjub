@@ -8,6 +8,7 @@ use crate::{
         Parameters,
         finished::Finished,
         round1::{RoundOne, RoundOneBroadcast},
+        round2::RoundTwo,
     },
     tests::{
         nz, reconstruct_random_pointshares, reconstruct_random_shares, test_threshold_eddsa_inner,
@@ -17,7 +18,7 @@ use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{One, UniformRand};
 use eddsa_babyjubjub::EdDSAPublicKey;
 use rand::{CryptoRng, Rng};
-use std::{collections::BTreeSet, num::NonZeroU16};
+use std::num::NonZeroU16;
 
 /// Runs the full DKG protocol for `num_parties` honest parties, where `threshold` parties are
 /// required to reconstruct the key, and returns the final state of every party.
@@ -27,6 +28,49 @@ pub(crate) fn run_keygen<R: Rng + CryptoRng>(
     context: &[u8],
     rng: &mut R,
 ) -> Vec<Finished<Curve>> {
+    let mut round2 = run_round_one(num_parties, threshold, context, rng);
+
+    let communications = round2
+        .iter()
+        .map(|party| {
+            (1..=num_parties)
+                .map(|for_party| {
+                    party
+                        .get_party_communication(nz(for_party))
+                        .expect("party index is valid for the parameters")
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    for (my_pos, party) in round2.iter_mut().enumerate() {
+        for (from_pos, comms) in communications.iter().enumerate() {
+            if from_pos == my_pos {
+                continue;
+            }
+            party
+                .add_party_communication(party_id(from_pos), &comms[my_pos])
+                .expect("secret share of an honest party verifies against its commitments");
+        }
+        assert!(
+            party.get_missing_parties().is_empty(),
+            "all round two messages have been added"
+        );
+        assert!(party.can_advance(), "round two is complete");
+    }
+
+    round2
+        .into_iter()
+        .map(|party| party.finalize().expect("round two is complete"))
+        .collect()
+}
+
+fn run_round_one<R: Rng + CryptoRng>(
+    num_parties: u16,
+    threshold: u16,
+    context: &[u8],
+    rng: &mut R,
+) -> Vec<RoundTwo<Curve>> {
     // 1) Every party samples a polynomial and broadcasts the commitments to its coefficients
     let mut round1 = (1..=num_parties)
         .map(|party_id| {
@@ -62,43 +106,9 @@ pub(crate) fn run_keygen<R: Rng + CryptoRng>(
     }
 
     // 2) Every party sends the evaluation of its polynomial to the respective party
-    let mut round2 = round1
+    round1
         .into_iter()
         .map(|party| party.round2().expect("round one is complete"))
-        .collect::<Vec<_>>();
-
-    let communications = round2
-        .iter()
-        .map(|party| {
-            (1..=num_parties)
-                .map(|for_party| {
-                    party
-                        .get_party_communication(nz(for_party))
-                        .expect("party index is valid for the parameters")
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-
-    for (my_pos, party) in round2.iter_mut().enumerate() {
-        for (from_pos, comms) in communications.iter().enumerate() {
-            if from_pos == my_pos {
-                continue;
-            }
-            party
-                .add_party_communication(party_id(from_pos), &comms[my_pos])
-                .expect("secret share of an honest party verifies against its commitments");
-        }
-        assert!(
-            party.get_missing_parties().is_empty(),
-            "all round two messages have been added"
-        );
-        assert!(party.can_advance(), "round two is complete");
-    }
-
-    round2
-        .into_iter()
-        .map(|party| party.finalize().expect("round two is complete"))
         .collect()
 }
 
@@ -275,394 +285,6 @@ fn round_one_broadcast_serde_round_trips() {
         .expect("round-tripped broadcast verifies");
 }
 
-#[test]
-fn dkg_can_disqualify_a_missing_round_one_dealer() {
-    let mut rng = rand::thread_rng();
-    let params = Parameters::new(nz(3), nz(2));
-    let context: &[u8] = b"keygen test: missing round-one dealer";
-    let mut states = (1..=2)
-        .map(|party| {
-            RoundOne::<Curve>::new(params, nz(party), context, &mut rng).expect("valid DKG party")
-        })
-        .collect::<Vec<_>>();
-    let broadcasts = states
-        .iter()
-        .map(RoundOne::get_broadcast_message)
-        .collect::<Vec<_>>();
-    states[0]
-        .add_party_communication(nz(2), broadcasts[1].clone())
-        .expect("surviving dealer broadcast");
-    states[1]
-        .add_party_communication(nz(1), broadcasts[0].clone())
-        .expect("surviving dealer broadcast");
-    for state in &mut states {
-        state
-            .disqualify_party(nz(3))
-            .expect("common timeout disqualifies missing dealer");
-    }
-
-    let mut round2 = states
-        .into_iter()
-        .map(|state| {
-            state
-                .round2()
-                .expect("round one complete after disqualification")
-        })
-        .collect::<Vec<_>>();
-    let Err(_) = round2[0].get_party_communication(nz(3)) else {
-        panic!("a disqualified round-one party must not receive a private share");
-    };
-    let to_one = round2[1]
-        .get_party_communication(nz(1))
-        .expect("share for party one");
-    let to_two = round2[0]
-        .get_party_communication(nz(2))
-        .expect("share for party two");
-    let Err(_) = round2[0].add_party_communication(nz(3), &to_one) else {
-        panic!("communication attributed to a disqualified dealer must be rejected");
-    };
-    round2[0]
-        .add_party_communication(nz(2), &to_one)
-        .expect("qualified dealer share");
-    round2[1]
-        .add_party_communication(nz(1), &to_two)
-        .expect("qualified dealer share");
-    let results = round2
-        .into_iter()
-        .map(|state| state.finalize().expect("qualified DKG finalizes"))
-        .collect::<Vec<_>>();
-    assert_eq!(results[0].pk, results[1].pk);
-    assert_eq!(results[0].pk_shares, results[1].pk_shares);
-    assert!(!results[0].pk_shares.contains_key(&nz(3)));
-}
-
-#[test]
-fn dkg_can_retroactively_apply_an_agreed_disqualification_set() {
-    let mut rng = rand::thread_rng();
-    let params = Parameters::new(nz(3), nz(2));
-    let context: &[u8] = b"keygen test: agreed disqualification set";
-    let mut states = (1..=3)
-        .map(|party| {
-            RoundOne::<Curve>::new(params, nz(party), context, &mut rng).expect("valid DKG party")
-        })
-        .collect::<Vec<_>>();
-    let broadcasts = states
-        .iter()
-        .map(RoundOne::get_broadcast_message)
-        .collect::<Vec<_>>();
-    for (receiver, state) in states.iter_mut().enumerate() {
-        for (dealer, broadcast) in broadcasts.iter().enumerate() {
-            if receiver != dealer {
-                state
-                    .add_party_communication(party_id(dealer), broadcast.clone())
-                    .expect("initial broadcast is accepted");
-            }
-        }
-    }
-
-    let agreed_disqualifications = BTreeSet::from([nz(3)]);
-    for state in &mut states {
-        state
-            .disqualify_parties(&agreed_disqualifications)
-            .expect("agreed set is applied atomically");
-    }
-    let excluded = states.pop().expect("state for excluded party");
-    assert!(!excluded.can_advance());
-    let Err(_) = excluded.round2() else {
-        panic!("a locally disqualified dealer must terminate");
-    };
-
-    let mut round2 = states
-        .into_iter()
-        .map(|state| state.round2().expect("qualified party advances"))
-        .collect::<Vec<_>>();
-    let to_one = round2[1]
-        .get_party_communication(nz(1))
-        .expect("share for party one");
-    let to_two = round2[0]
-        .get_party_communication(nz(2))
-        .expect("share for party two");
-    round2[0]
-        .add_party_communication(nz(2), &to_one)
-        .expect("qualified dealer share");
-    round2[1]
-        .add_party_communication(nz(1), &to_two)
-        .expect("qualified dealer share");
-    let results = round2
-        .into_iter()
-        .map(|state| state.finalize().expect("qualified DKG finalizes"))
-        .collect::<Vec<_>>();
-    assert_eq!(results[0].pk, results[1].pk);
-    assert_eq!(results[0].pk_shares, results[1].pk_shares);
-    assert!(!results[0].pk_shares.contains_key(&nz(3)));
-}
-
-#[test]
-fn dkg_disqualification_preserves_the_threshold() {
-    let mut rng = rand::thread_rng();
-    let mut state = RoundOne::<Curve>::new(
-        Parameters::new(nz(3), nz(3)),
-        nz(1),
-        b"keygen test: threshold preservation",
-        &mut rng,
-    )
-    .expect("valid DKG party");
-    let Err(_) = state.disqualify_parties(&BTreeSet::from([nz(3)])) else {
-        panic!("disqualification below the threshold must be rejected");
-    };
-    assert_eq!(state.get_missing_parties(), vec![nz(2), nz(3)]);
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum BlameTestMode {
-    Valid,
-    Malformed,
-    Missing,
-    MissingPrivateMessage,
-    MissingVerdict,
-}
-
-#[allow(
-    clippy::too_many_lines,
-    reason = "Exercises the complete optional two-broadcast workflow"
-)]
-fn run_optional_blame_round(mode: BlameTestMode, num_parties: u16, threshold: u16) {
-    let mut rng = rand::thread_rng();
-    assert!(
-        num_parties >= 3,
-        "blame test fixture requires at least three parties"
-    );
-    let parameters = Parameters::new(nz(num_parties), nz(threshold));
-    let context: &[u8] = b"keygen test: optional blame round";
-    let mut round1 = (1..=num_parties)
-        .map(|party| {
-            RoundOne::<Curve>::new(parameters, nz(party), context, &mut rng)
-                .expect("valid DKG parameters")
-        })
-        .collect::<Vec<_>>();
-    let round1_broadcasts = round1
-        .iter()
-        .map(RoundOne::get_broadcast_message)
-        .collect::<Vec<_>>();
-    for (receiver, state) in round1.iter_mut().enumerate() {
-        for (dealer, broadcast) in round1_broadcasts.iter().enumerate() {
-            if receiver != dealer {
-                state
-                    .add_party_communication(party_id(dealer), broadcast.clone())
-                    .expect("honest round-one broadcast");
-            }
-        }
-    }
-
-    let mut round2 = round1
-        .into_iter()
-        .map(|state| state.round2().expect("round one complete"))
-        .collect::<Vec<_>>();
-    let mut private_shares = round2
-        .iter()
-        .map(|dealer| {
-            (1..=num_parties)
-                .map(|receiver| {
-                    dealer
-                        .get_party_communication(nz(receiver))
-                        .expect("valid receiver")
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-
-    // Dealer 1 equivocates only toward receiver 2, which will complain publicly.
-    if mode != BlameTestMode::MissingPrivateMessage {
-        private_shares[0][1].secret_share += crate::ScalarField::one();
-    }
-    for (receiver, state) in round2.iter_mut().enumerate() {
-        for (dealer, shares) in private_shares.iter().enumerate() {
-            if receiver != dealer {
-                if mode == BlameTestMode::MissingPrivateMessage && receiver == 1 && dealer == 0 {
-                    state
-                        .complain_missing_party(nz(1))
-                        .expect("missing private share becomes a complaint");
-                } else {
-                    state
-                        .add_party_communication_for_blame(party_id(dealer), &shares[receiver])
-                        .expect("well-formed private communication is retained for blame");
-                }
-            }
-        }
-    }
-
-    let mut blame_rounds = round2
-        .into_iter()
-        .map(|state| state.blame_round().expect("all private shares received"))
-        .collect::<Vec<_>>();
-    let verdicts = blame_rounds
-        .iter()
-        .map(crate::keygen::blame::BlameRound::verdict)
-        .collect::<Vec<_>>();
-    assert!(verdicts[0].is_ok());
-    assert_eq!(
-        verdicts[1]
-            .blamed_parties()
-            .iter()
-            .copied()
-            .collect::<Vec<_>>(),
-        vec![nz(1)]
-    );
-    assert!(verdicts[2].is_ok());
-    let completing_parties = if mode == BlameTestMode::MissingVerdict {
-        blame_rounds.len() - 1
-    } else {
-        blame_rounds.len()
-    };
-    for (receiver, state) in blame_rounds.iter_mut().take(completing_parties).enumerate() {
-        for (sender, verdict) in verdicts.iter().enumerate() {
-            if receiver != sender
-                && !(mode == BlameTestMode::MissingVerdict
-                    && sender + 1 == usize::from(num_parties))
-            {
-                state
-                    .add_verdict(party_id(sender), verdict.clone())
-                    .expect("valid verdict broadcast");
-            }
-        }
-        if mode == BlameTestMode::MissingVerdict {
-            state
-                .disqualify_missing_verdict(nz(num_parties))
-                .expect("common timeout disqualifies a dealer that withheld its verdict");
-        }
-    }
-
-    let mut revelations = blame_rounds
-        .iter_mut()
-        .take(completing_parties)
-        .enumerate()
-        .map(|(dealer, state)| {
-            if mode == BlameTestMode::Missing && dealer == 0 {
-                None
-            } else {
-                state.revelation().expect("verdict exchange complete")
-            }
-        })
-        .collect::<Vec<_>>();
-    if mode == BlameTestMode::Malformed {
-        revelations[0]
-            .as_mut()
-            .expect("dealer 1 was accused")
-            .shares[0]
-            .share += crate::ScalarField::one();
-    }
-    // Reliable broadcast means the accused dealer sees its own revelation exactly as the others do,
-    // so it judges itself with the same rule and reaches the same verdict.
-    for state in blame_rounds.iter_mut().take(completing_parties) {
-        for (dealer, revelation) in revelations.iter().enumerate() {
-            if let Some(revelation) = revelation {
-                state
-                    .add_revelation(party_id(dealer), revelation)
-                    .expect("accused dealer's public revelation is processed");
-            }
-        }
-    }
-    if mode == BlameTestMode::Missing {
-        for state in &mut blame_rounds {
-            state
-                .disqualify_missing_dealer(nz(1))
-                .expect("accused dealer can be disqualified after withholding its share");
-        }
-    }
-
-    let results = blame_rounds
-        .into_iter()
-        .take(completing_parties)
-        .map(crate::keygen::blame::BlameRound::finalize)
-        .collect::<Vec<_>>();
-    let expected_disqualified = if mode == BlameTestMode::MissingVerdict {
-        vec![nz(num_parties)]
-    } else if matches!(
-        mode,
-        BlameTestMode::Valid | BlameTestMode::MissingPrivateMessage
-    ) {
-        vec![]
-    } else {
-        vec![nz(1)]
-    };
-    // A blame-round disqualification drops the dealer's polynomial contribution, not its standing as
-    // a shareholder: it completed round two, so it can compute its share of the surviving aggregate
-    // polynomial either way. Every party that reached the blame round therefore finalizes, and all of
-    // them — the disqualified dealer included — agree on the public key and on every public-key
-    // share. Only round-one disqualifications remove a party from the sharing.
-    let all_results = results
-        .iter()
-        .filter_map(|result| result.as_ref().ok())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        all_results.len(),
-        completing_parties,
-        "every party that reached the blame round finalizes"
-    );
-    let expected = &all_results[0].finished;
-    for result in all_results {
-        assert_eq!(result.disqualified_parties, expected_disqualified);
-        assert!(result.excluded_verdict_parties.is_empty());
-        assert_eq!(
-            result.finished.pk_shares.len(),
-            usize::from(num_parties),
-            "a blame-round disqualification drops the polynomial, not the shareholder"
-        );
-        assert!(
-            expected_disqualified
-                .iter()
-                .all(|party| result.finished.pk_shares.contains_key(party)),
-            "a disqualified dealer keeps a public-key share"
-        );
-        assert_eq!(result.finished.pk, expected.pk);
-        assert_eq!(result.finished.pk_shares, expected.pk_shares);
-        assert_eq!(
-            (Affine::generator() * result.finished.sk_share).into_affine(),
-            result.finished.pk_shares[&result.finished.my_idx]
-        );
-    }
-
-    // Any `threshold` of the resulting shares still reconstruct the same key, so the sharing is
-    // usable across the full shareholder set rather than only the qualified dealers.
-    let sk_shares = results
-        .iter()
-        .filter_map(|result| result.as_ref().ok())
-        .map(|result| result.finished.sk_share)
-        .collect::<Vec<_>>();
-    let degree = usize::from(threshold) - 1;
-    assert_eq!(
-        (Affine::generator() * reconstruct_random_shares(&sk_shares, degree, &mut rng))
-            .into_affine(),
-        expected.pk,
-        "any threshold of the surviving shares reconstructs the key"
-    );
-}
-
-#[test]
-fn optional_blame_round_accepts_valid_dealer_revelation() {
-    run_optional_blame_round(BlameTestMode::Valid, 3, 2);
-}
-
-#[test]
-fn optional_blame_round_disqualifies_malformed_dealer_revelation() {
-    run_optional_blame_round(BlameTestMode::Malformed, 3, 2);
-}
-
-#[test]
-fn optional_blame_round_disqualifies_missing_dealer_revelation() {
-    run_optional_blame_round(BlameTestMode::Missing, 3, 2);
-}
-
-#[test]
-fn optional_blame_round_recovers_a_missing_private_message() {
-    run_optional_blame_round(BlameTestMode::MissingPrivateMessage, 3, 2);
-}
-
-#[test]
-fn optional_blame_round_disqualifies_a_missing_verdict_dealer() {
-    run_optional_blame_round(BlameTestMode::MissingVerdict, 3, 2);
-}
-
 /// Blame attribution must survive being logged, and a local configuration mismatch must not be
 /// reported as remote misbehaviour.
 #[test]
@@ -700,4 +322,148 @@ fn round_one_errors_separate_attributable_blame_from_a_local_mismatch() {
         "a configuration mismatch must not accuse anyone: {error}"
     );
     assert!(matches!(error, crate::keygen::MessageError::Malformed(_)));
+}
+
+#[test]
+fn round_one_requires_every_configured_participant() {
+    let mut rng = rand::thread_rng();
+    let params = Parameters::new(nz(3), nz(2));
+    let context = b"keygen test: incomplete commitments";
+    let mut receiver =
+        RoundOne::<Curve>::new(params, nz(1), context, &mut rng).expect("valid DKG party");
+    let broadcast = RoundOne::<Curve>::new(params, nz(2), context, &mut rng)
+        .expect("valid DKG party")
+        .get_broadcast_message();
+    receiver
+        .add_party_communication(nz(2), broadcast.clone())
+        .expect("valid broadcast");
+    let error = receiver
+        .add_party_communication(nz(2), broadcast)
+        .expect_err("duplicate delivery cannot replace a missing participant");
+    assert!(error.attributable_parties().is_empty());
+    assert_eq!(receiver.get_missing_parties(), vec![nz(3)]);
+    assert!(
+        !receiver.can_advance(),
+        "a signing threshold is insufficient for DKG"
+    );
+    let Err(_) = receiver.round2() else {
+        panic!("cannot advance while any participant's commitment is missing");
+    };
+}
+
+#[test]
+fn round_two_requires_every_configured_participant() {
+    let mut rng = rand::thread_rng();
+    let mut states = run_round_one(3, 2, b"keygen test: missing private share", &mut rng);
+    let share = states[1]
+        .get_party_communication(nz(1))
+        .expect("share for participant one");
+    let mut receiver = states.remove(0);
+    receiver
+        .add_party_communication(nz(2), &share)
+        .expect("valid private share");
+    let error = receiver
+        .add_party_communication(nz(2), &share)
+        .expect_err("duplicate delivery cannot replace a missing participant");
+    assert!(error.attributable_parties().is_empty());
+    assert_eq!(receiver.get_missing_parties(), vec![nz(3)]);
+    assert!(
+        !receiver.can_advance(),
+        "all DKG participants must contribute"
+    );
+    let Err(_) = receiver.finalize() else {
+        panic!("cannot finalize while any participant's private share is missing");
+    };
+}
+
+#[test]
+fn invalid_private_share_returns_culprit_and_prevents_finalization() {
+    let mut rng = rand::thread_rng();
+    let mut states = run_round_one(3, 2, b"keygen test: invalid private share", &mut rng);
+    let mut invalid = states[1]
+        .get_party_communication(nz(1))
+        .expect("share for participant one");
+    invalid.secret_share += crate::ScalarField::one();
+    let valid = states[2]
+        .get_party_communication(nz(1))
+        .expect("share for participant one");
+    let mut receiver = states.remove(0);
+    receiver
+        .add_party_communication(nz(3), &valid)
+        .expect("valid private share");
+    let error = receiver
+        .add_party_communication(nz(2), &invalid)
+        .expect_err("an invalid share must fail its Feldman equation");
+    assert_eq!(error.attributable_parties(), vec![nz(2)]);
+    assert!(matches!(
+        error,
+        crate::keygen::MessageError::MaliciousParty(_)
+    ));
+    assert_eq!(receiver.get_missing_parties(), vec![nz(2)]);
+    assert!(!receiver.can_advance());
+    let Err(_) = receiver.finalize() else {
+        panic!("an invalid share must never enter the aggregate");
+    };
+}
+
+#[test]
+fn proof_binds_context_parameters_and_all_commitments() {
+    let mut rng = rand::thread_rng();
+    let params = Parameters::new(nz(3), nz(2));
+    let context = b"keygen test: transcript binding";
+    let honest = RoundOne::<Curve>::new(params, nz(2), context, &mut rng)
+        .expect("valid DKG party")
+        .get_broadcast_message();
+    let mut changed_coefficient = honest;
+    changed_coefficient.commitments[1] =
+        (changed_coefficient.commitments[1] + Affine::generator()).into_affine();
+    let other_context = RoundOne::<Curve>::new(params, nz(2), b"another session", &mut rng)
+        .expect("valid DKG party")
+        .get_broadcast_message();
+    let other_count =
+        RoundOne::<Curve>::new(Parameters::new(nz(4), nz(2)), nz(2), context, &mut rng)
+            .expect("valid DKG party")
+            .get_broadcast_message();
+
+    for broadcast in [changed_coefficient, other_context, other_count] {
+        let mut receiver =
+            RoundOne::<Curve>::new(params, nz(1), context, &mut rng).expect("valid DKG party");
+        let error = receiver
+            .add_party_communication(nz(2), broadcast)
+            .expect_err("a proof for a different transcript must fail");
+        assert_eq!(error.attributable_parties(), vec![nz(2)]);
+        assert_eq!(receiver.get_missing_parties(), vec![nz(2), nz(3)]);
+        assert!(!receiver.can_advance());
+    }
+}
+
+#[test]
+fn equal_constant_commitments_require_independent_participant_proofs() {
+    use crate::keygen::schnorr::{SchnorrZkProof, proof_context};
+
+    let mut rng = rand::thread_rng();
+    let params = Parameters::new(nz(3), nz(2));
+    let context = b"keygen test: independently proven equal constants";
+    let mut receiver =
+        RoundOne::<Curve>::new(params, nz(1), context, &mut rng).expect("valid DKG party");
+    let constant = crate::ScalarField::from(5_u64);
+    let proof_context = proof_context(b"PEDPOP_DKG_V1", context, &[params]);
+    for party in [nz(2), nz(3)] {
+        let commitments = vec![
+            (Affine::generator() * constant).into_affine(),
+            (Affine::generator() * crate::ScalarField::from(party.get())).into_affine(),
+        ];
+        let nizk = SchnorrZkProof::new(
+            &proof_context,
+            party,
+            &constant,
+            &commitments[0],
+            &commitments[1..],
+            &mut rng,
+        );
+        receiver
+            .add_party_communication(party, RoundOneBroadcast { commitments, nizk })
+            .expect("each participant proves knowledge under its own ID");
+    }
+    assert!(receiver.can_advance());
 }

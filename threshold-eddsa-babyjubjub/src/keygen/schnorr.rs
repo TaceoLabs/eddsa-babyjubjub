@@ -1,8 +1,8 @@
 //! Non-interactive proof of knowledge of a discrete logarithm.
 //!
 //! The parties use this Schnorr proof in the first round of the DKG protocol to show that they know
-//! the constant term of their polynomial. This prevents a party from choosing its contribution to
-//! the public key depending on the contributions of the other parties.
+//! the constant term of their polynomial. This protects against rogue-key attacks, but does not
+//! prevent a last broadcaster from grinding known secret contributions to bias the public key.
 
 use crate::keygen::Parameters;
 use ark_ec::{AffineRepr, CurveGroup};

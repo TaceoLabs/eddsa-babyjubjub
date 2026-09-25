@@ -82,8 +82,7 @@ pub fn evaluate_poly<F: PrimeField>(poly: &[F], x: F) -> F {
 /// Evaluates a committed polynomial in the exponent at a party index.
 ///
 /// The party index is a [`NonZeroU16`], so the evaluation can never silently return the
-/// commitment to the constant term, which in the reshare protocol is the sender's secret key
-/// share.
+/// commitment to the constant term, which is the dealer's secret contribution to the key.
 ///
 /// # Panics
 /// Panics if `coefficients` is empty.

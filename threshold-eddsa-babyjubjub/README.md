@@ -9,8 +9,9 @@ threshold Schnorr construction described in
 [ROAST: Robust Asynchronous Schnorr Threshold Signatures](https://eprint.iacr.org/2022/550.pdf).
 It produces an ordinary `EdDSASignature`, so the result is verified with the
 existing single-party `EdDSAPublicKey::verify` API. The distributed key
-generation (DKG) protocol follows the PedPoP-based algorithm in
-the [TACEO OPRF protocol documentation](https://github.com/TaceoLabs/oprf-service/tree/main/docs).
+generation (DKG) protocol uses Feldman commitments and Schnorr proofs of
+possession, following the abort-on-error model of
+[`frost-core` key generation](https://docs.rs/frost-core/3.0.0/frost_core/keys/dkg/index.html).
 
 > [!WARNING]
 > **Key generation requires reliable broadcast for the messages
@@ -18,7 +19,7 @@ the [TACEO OPRF protocol documentation](https://github.com/TaceoLabs/oprf-servic
 > participant is not sufficient: a malicious sender must not be able to make
 > two honest participants accept different messages for the same protocol step.
 > The application must provide agreement, sender authentication, duplicate
-> suppression, and consistent timeout/disqualification decisions.
+> suppression, and coordination of aborted runs and restarts.
 >
 > This crate does not implement networking, reliable broadcast, participant
 > authentication, persistence, or timeouts. Supplying these is the integrator's
@@ -34,7 +35,7 @@ the [TACEO OPRF protocol documentation](https://github.com/TaceoLabs/oprf-servic
   commitments, public key, and message into the BLAKE3 nonce-combining hash.
 - Poseidon2 for the final EdDSA Fiat-Shamir challenge.
 - Signature-share aggregation with optional identifiable abort.
-- PedPoP-style dealerless DKG, including an optional public complaint round.
+- Dealerless DKG requiring valid contributions from every configured participant.
 - Serde support for protocol messages and zeroization of secret state on drop.
 
 The package name is `taceo-threshold-eddsa-babyjubjub`. The crate currently
@@ -60,13 +61,13 @@ under the wrong ID lets its sender speak, and be blamed, as someone else.
 | Signing requests (context, signer set, aggregate commitments, message) | **Authenticated aggregator-to-signer communication** | Blame from `sign_agg_with_identifiable_abort` is sound only if every signer received exactly the inputs the aggregator later verifies against. A tampered request makes the honest recipient's share fail validation, so the honest signer is blamed. |
 | DKG round-one polynomial commitments and proof of possession | **Reliable broadcast to every DKG party** | All honest parties must use the same commitments and derive the same public key and public-key shares. |
 | DKG round-two polynomial evaluations | **Private, authenticated point-to-point channel** | Each evaluation is a secret intended only for its recipient. |
-| DKG complaint verdicts and dealer revelations | **Reliable broadcast to every DKG party** | All honest parties must see the same accusation set, revelations, and qualified dealer set. |
-| Missing-message, verdict, and revelation timeout decisions | **Externally coordinated agreement** | Every honest participant must apply the same disqualification or verdict-exclusion set. |
+| DKG restarts | **Agreement on a fresh session and participant set** | Discard an aborted run and generate fresh polynomials before retrying. |
 
-Neither commitments nor signature shares carry a session binding of their own,
-so the authenticated channels must also be replay-protected and bound to the
-signing session: a share replayed from another session fails validation and its
-honest author is blamed.
+The authenticated channels must also be replay-protected and bind each message
+to its protocol, session, sender, and recipient. DKG round-one proofs bind the
+session context; private round-two messages carry only a scalar. A share replayed
+from another session fails validation and can incorrectly implicate its honest
+author. The same transport binding is required for signing messages.
 
 Reliable broadcast means more than best-effort multicast. In particular, if one
 honest participant accepts a broadcast from a sender, all honest participants
@@ -193,7 +194,7 @@ input to the proof-of-possession context, so reusing it with the same parameters
 makes round-one broadcasts replayable: an adversary with network control can
 suppress an honest party's fresh broadcast, inject its stale one from the earlier
 run, and have that party's fresh private evaluations fail against the stale
-commitments — which gets an honest party blamed and disqualified. Use fresh
+commitments — which incorrectly implicates an honest party and aborts the run. Use fresh
 random bytes per run and never derive the context from configuration alone.
 The context is not carried in the protocol
 messages: a party running with a different context fails proof verification at
@@ -201,71 +202,38 @@ every peer and is reported as malicious, so establish agreement on the context
 before starting the run.
 
 1. Every party creates `keygen::round1::RoundOne` with identical parameters and
-   session context. It reliably broadcasts `get_broadcast_message()`, containing its
-   coefficient commitments and Schnorr proof of possession. Every other party
-   passes that same broadcast to `add_party_communication`. A missing or
-   malformed round-one dealer can be excluded with `disqualify_party`, but only
-   after all honest parties agree on that decision. For duplicate constant
-   commitments, apply both reported IDs atomically with `disqualify_parties`;
-   this removes broadcasts accepted before the duplicate was discovered.
-2. After `can_advance()` succeeds, `round2()` creates one secret polynomial
-   evaluation per recipient. Deliver each `get_party_communication(recipient)`
-   privately and authentically, and process it with `add_party_communication`.
-3. In the all-honest path, `finalize()` returns `keygen::finished::Finished`,
-   containing the local secret share, every public-key share, and the aggregate
-   public key.
+   session context. It reliably broadcasts `get_broadcast_message()`, containing
+   coefficient commitments and a Schnorr proof of possession. Each recipient
+   passes that broadcast and its authenticated sender ID to `add_party_communication`.
+2. After every other participant's broadcast verifies, `round2()` creates the
+   private polynomial evaluations. Deliver each `get_party_communication(recipient)`
+   over a confidential, authenticated channel bound to this session and recipient,
+   and process received shares with `add_party_communication`.
+3. After every other participant's share verifies, `finalize()` returns
+   `keygen::finished::Finished`, containing the local secret share, every
+   public-key share, and the aggregate public key. Compare `agreement_digest()`
+   across participants before using the key; this does not replace reliable broadcast.
 
-For a complaint-capable run, receive round-two shares with
-`add_party_communication_for_blame`, enter `blame_round()`, and reliably
-broadcast every party's `verdict()`. Each accused dealer then reliably broadcasts
-its `revelation()`. Missing revelations may be resolved with
-`disqualify_missing_dealer`, but only after an externally agreed deadline that
-all honest parties apply identically. `BlameRound::finalize` excludes
-disqualified dealers and reports their IDs.
+All `n` participants must contribute even though only `t` resulting shares are
+needed to sign. An invalid contribution aborts the run. A missing contribution
+prevents advancement; abort if the application's delivery deadline expires.
+There is no participant-exclusion, complaint, or public share-revelation API.
+Never publish private evaluations to recover from a timeout: an honest
+recipient's revealed evaluation, combined with evaluations already held by
+corrupt participants, can disclose a dealer's entire polynomial.
 
-`revelation()` derives its accuser set from the collected verdicts rather than
-from a caller-supplied list, so a dealer never answers a party that did not
-complain. It also refuses once the accuser set reaches the threshold, since that
-many evaluations determine the dealer's whole polynomial. Under the `t - 1`
-corruption bound this cannot occur for an honest dealer, because an honest party
-never accuses one.
+To retry, discard the old state, agree on the new participant set and parameters,
+and start a new run with fresh randomness and a fresh context. A failure
+identifies a sender locally when a cryptographic check fails; it does not produce
+a publicly verifiable proof of private delivery. A timeout alone is not proof
+that its sender acted maliciously.
 
-An accused dealer must feed its own revelation back through `add_revelation`, as
-the broadcast channel delivered it, just as every other party does. `revelation()
-` does not mark the dealer resolved by itself. Otherwise a dealer whose broadcast
-was corrupted or truncated in transit would judge itself qualified while everyone
-else disqualified it, and would silently finalize onto a key nobody else uses.
-
-Following PedPoP, a dealer disqualified in the blame round has its _contribution_
-dropped from the aggregate but remains a shareholder: it completed round two, so
-it holds every qualified dealer's evaluation and can derive its share of the
-surviving polynomial regardless of what the honest parties record. It therefore
-keeps a `pk_shares` entry and `finalize()` returns its share. Its ID is still
-listed in `BlameResult::disqualified_parties`; exclude a proven cheater from
-future signing committees at the application layer if that is the intent.
-Round-one disqualifications are different: those parties never reached round two,
-so they are not shareholders and hold nothing. `disqualify_parties` and
-`disqualify_missing_verdict` refuse a decision that would leave fewer than `t`
-parties. `disqualify_missing_dealer` and the implicit disqualification of an
-invalid revelation do not: those are caught one step later, by `finalize`, which
-refuses to produce a key from fewer than `t` qualified dealers. Either way a run
-can never silently produce an unusable key, but check the count yourself if you
-want the failure attributed to the decision that caused it.
-
-If a selected dealer's private round-two evaluation never arrives, call
-`complain_missing_party` after an externally agreed delivery deadline, then
-enter the blame round. The dealer can reveal the committed evaluation publicly
-or be disqualified under the same coordinated rule.
-
-If a qualified dealer withholds or sends an invalid blame verdict, the remaining
-parties can apply `disqualify_missing_verdict` after a common timeout. Its
-polynomial is removed from the DKG output. Disqualification fails—and the run
-must abort—if fewer than the configured threshold parties would remain.
-
-The direct `add_party_communication` path reports a malformed private share as
-an error and is suitable when the caller will abort the whole run. Use the blame
-path when the caller needs public resolution and a consistently qualified
-dealer set.
+Like the ordinary FROST/Pedersen DKG, this protocol does **not** guarantee an
+unbiased public key. A last broadcaster can try known secret contributions until
+the resulting public key has a desired property, and abort/retry choices can
+introduce further bias. Schnorr proofs prevent rogue-key attacks; they do not
+force independently chosen contributions. Applications needing unbiased
+randomness require a protocol designed for that guarantee.
 
 ## Outputs and interoperability
 
@@ -274,7 +242,7 @@ DKG returns `keygen::finished::Finished<C>`. For Baby Jubjub, use
 `key_share::DLogShareShamir` for signing by binding the share to its party
 ID, total party count, and threshold; `pk` and `pk_shares` supply the public
 values required for verification and identifiable abort.
-`contributing_parties` names the qualified dealers, and
+`contributing_parties` names all participants in the run, and
 `agreement_digest()` reduces every value that must agree across participants to
 one comparable 32-byte hash.
 
@@ -292,8 +260,8 @@ The message-intake APIs — `RoundOne::add_party_communication` and
 `RoundTwo::add_party_communication` — return `keygen::MessageError`, which
 keeps three outcomes apart:
 
-- `MaliciousParty` and `DuplicateCommitments` **attribute blame**: a
-  cryptographic check failed and the named parties are provably at fault.
+- `MaliciousParty` attributes a failed cryptographic check to the authenticated
+  sender, assuming all parties agreed on parameters and context.
 - `Malformed` does not. The message did not fit the local protocol view, most
   often because the _local_ node is misconfigured — a node started with different
   `Parameters` derives a different proof-of-possession context and expects a
@@ -302,15 +270,18 @@ keeps three outcomes apart:
 - `LocalFault` means the caller misused the API, so no remote message was
   evaluated.
 
-Use `MessageError::attributable_parties()` to act on blame. Every variant names
-the parties involved in its `Display` output, so logging the error no longer
-discards the attribution — but only the first two justify a disqualification.
+Use `MessageError::attributable_parties()` to inspect local attribution. The
+`Display` output retains the relevant party IDs. Abort after a rejected protocol
+contribution and investigate its cause before deciding which participants to
+include in a fresh run.
 
 ## References
 
 - Tim Ruffing et al., [ROAST: Robust Asynchronous Schnorr Threshold
   Signatures](https://eprint.iacr.org/2022/550.pdf), especially the FROST3
   signing algorithms and identifiable-abort construction.
+- Zcash Foundation, [`frost-core` DKG implementation](https://github.com/ZcashFoundation/frost/blob/frost-core/v3.0.0/frost-core/src/keys/dkg.rs).
+- Chelsea Komlo and Ian Goldberg, [FROST: Flexible Round-Optimized Schnorr Threshold Signatures](https://eprint.iacr.org/2020/852), including the discussion of DKG bias in section 2.3.
 - TACEO, [OPRF protocol documentation](https://github.com/TaceoLabs/oprf-service/tree/main/docs),
   section “Key Generation and Reshare” ([PDF](https://github.com/TaceoLabs/oprf-service/blob/main/docs/oprf.pdf),
   [Typst source](https://github.com/TaceoLabs/oprf-service/blob/main/docs/oprf.typst)).
