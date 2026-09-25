@@ -1,12 +1,19 @@
 //! Threshold `EdDSA` signatures over the Baby Jubjub curve based on Frost3, using Poseidon2 as the internal hash function for the Fiat-Shamir transform.
+//!
+//! This crate implements the `t`-out-of-`n` variant of the protocol, where the signing key is
+//! shared via a Shamir polynomial of degree `d`, so any `d + 1` parties can jointly produce a
+//! signature by weighting their shares with the matching Lagrange coefficients.
 
 pub mod commit;
 pub mod nonce;
 pub mod partial_commit;
+pub mod secret;
 mod serde_utils;
 pub mod session;
-pub mod shamir;
 pub mod signature;
+#[cfg(test)]
+mod test;
+pub(crate) mod utils;
 
 use ark_ec::{CurveGroup, PrimeGroup};
 

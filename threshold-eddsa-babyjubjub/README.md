@@ -45,15 +45,15 @@ format and individual field encodings may allocate while decoding.
 
 ## Threshold signing
 
-The primary API is in the `shamir` module:
+The protocol proceeds as follows:
 
-- `EdDSASessionShamir::pre_round` samples two secret, single-use nonces and
-  returns their public, identity-bound `PartialEdDSACommitmentsShamir`.
+- `EdDSASession::pre_round` samples two secret, single-use nonces and
+  returns their public, identity-bound `PartialEdDSACommitments`.
 - The aggregator selects a signing set of at least the threshold size and calls
-  `EdDSACommitmentsShamir::pre_agg`; aggregation canonicalizes the party order
+  `EdDSACommitments::pre_agg`; aggregation canonicalizes the party order
   and rejects empty or duplicate sets.
 - Each selected party consumes its session with
-  `EdDSASessionShamir::sign_round`. The signer validates its identity and
+  `EdDSASession::sign_round`. The signer validates its identity and
   committee metadata and derives both its Lagrange coefficient and the public key
   internally, from the `DLogShareShamir` it was given. `sign_round` takes no
   public key argument, so a signer cannot be pointed at a key it does not hold a
@@ -104,7 +104,7 @@ let valid = public_key.verify(message, &signature);
 
 ### Nonce and session safety
 
-`EdDSASessionShamir` deliberately cannot be cloned and `sign_round` consumes it.
+`EdDSASession` deliberately cannot be cloned and `sign_round` consumes it.
 Never reuse or restore its nonce state. Use a fresh, globally unique UUID for
 each logical signing attempt, and ensure every participant agrees on the same
 session ID, signer set, public key, and message. Secret-key shares must be

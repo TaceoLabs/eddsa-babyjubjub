@@ -1,11 +1,9 @@
 //! Distributed Partial Commitments for Threshold `EdDSA`
 //!
-//! This module defines the `PartialEdDSACommitments` struct.
+//! This module defines the `PartialEdDSACommitments` struct, the commitment share a single party
+//! sends to the aggregator in the pre-round.
 //! Each participating party generates commitment shares that
-//! are then aggregated to produce a non-interactive challenge hash for the `EdDSA` signature, without.
-//!
-//! The primitives defined here are agnostic to the underlying threshold sharing scheme and are used by
-//! the Shamir variant, which is implemented in the submodule `shamir`.
+//! are then aggregated to produce a non-interactive challenge hash for the `EdDSA` signature.
 //!
 //! This module provides:
 //! - Per-party commitment structures for partial commitment (nonce splits).
@@ -32,7 +30,9 @@ pub struct PartialEdDSACommitments {
 }
 
 impl PartialEdDSACommitments {
-    pub(crate) fn party_id(&self) -> u16 {
+    /// Return the party ID carried by this commitment.
+    #[must_use]
+    pub fn party_id(&self) -> u16 {
         self.party_id
     }
 }

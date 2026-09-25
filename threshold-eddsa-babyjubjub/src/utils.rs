@@ -80,7 +80,7 @@ pub fn evaluate_poly<F: PrimeField>(poly: &[F], x: F) -> F {
 
 #[cfg(test)]
 pub(crate) mod test_utils {
-    use crate::shamir::utils::lagrange_from_coeff;
+    use crate::utils::lagrange_from_coeff;
     use ark_ec::CurveGroup;
     use rand::{Rng, seq::IteratorRandom as _};
 
