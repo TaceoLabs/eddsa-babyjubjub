@@ -18,7 +18,6 @@ ark-serde-compat = { workspace = true }
 ark-serialize = { workspace = true }
 blake3 = { workspace = true }
 eyre = { workspace = true }
-num-bigint.workspace = true
 poseidon2 = { package = "taceo-poseidon2", path = "../poseidon2", version = "0.3.0", default-features = false, features = [
   "bn254",
   "t8"
