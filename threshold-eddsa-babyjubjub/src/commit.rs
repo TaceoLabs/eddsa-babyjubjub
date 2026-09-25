@@ -252,13 +252,15 @@ impl EdDSACommitments {
         &self,
         shares: &'a [EdDSASigShare],
     ) -> eyre::Result<Vec<&'a EdDSASigShare>> {
+        let input_len = shares.len();
         let shares = shares
             .iter()
             .map(|share| (share.party_id(), share))
             .collect::<BTreeMap<_, _>>();
-        if shares.len() != self.contributing_parties.len()
-            || shares.keys().copied().collect::<Vec<_>>() != self.contributing_parties
-        {
+        if shares.len() != input_len {
+            eyre::bail!("duplicate signature share party ID");
+        }
+        if shares.keys().copied().collect::<Vec<_>>() != self.contributing_parties {
             eyre::bail!("signature shares do not match the contributing party set");
         }
         Ok(shares.into_values().collect())

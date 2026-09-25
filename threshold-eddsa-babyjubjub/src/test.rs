@@ -201,6 +201,76 @@ fn test_threshold_eddsa_shamir_identifies_cheating_parties() {
     test_threshold_eddsa(7, 3, &[0, 2]);
 }
 
+/// A duplicated signature-share party ID must be rejected as invalid input. Silently collapsing
+/// duplicates (last one wins) would let a forged duplicate replace the honest share and get the
+/// honest party blamed by the identifiable-abort path.
+#[test]
+fn aggregation_rejects_duplicate_signature_shares() {
+    let mut rng = rand::thread_rng();
+    let message = BaseField::rand(&mut rng);
+    let x = ScalarField::rand(&mut rng);
+    let public_key = EdDSAPublicKey {
+        pk: (Affine::generator() * x).into_affine(),
+    };
+    let x_shares = share(x, &public_key, 3, 1, &mut rng);
+    let session_id = Uuid::new_v4();
+
+    let mut sessions = Vec::new();
+    let mut commitments = Vec::new();
+    for party_id in 1..=2 {
+        let (session, comm) = EdDSASession::pre_round(nz(party_id), &mut rng);
+        sessions.push(session);
+        commitments.push(comm);
+    }
+    let challenge = EdDSACommitments::pre_agg(&commitments).expect("valid commitment set");
+
+    let mut sig_shares = sessions
+        .into_iter()
+        .zip(&x_shares)
+        .map(|(session, x_share)| {
+            session
+                .sign_round(session_id, x_share, message, challenge.clone())
+                .expect("valid signing package")
+        })
+        .collect::<Vec<_>>();
+
+    // A forged duplicate carrying honest party 2's ID.
+    let mut forged = sig_shares[1].clone();
+    forged.1 += ScalarField::from(1_u64);
+    sig_shares.push(forged);
+
+    let Err(_) = challenge
+        .clone()
+        .sign_agg(session_id, &sig_shares, message, public_key.clone())
+    else {
+        panic!("duplicate signature-share party IDs must be rejected");
+    };
+
+    let public_key_shares = x_shares[..2]
+        .iter()
+        .map(|x_share| {
+            (
+                x_share.party_id(),
+                (Affine::generator() * x_share.value).into_affine(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    match challenge.sign_agg_with_identifiable_abort(
+        session_id,
+        &sig_shares,
+        message,
+        &public_key,
+        &public_key_shares,
+        &commitments,
+    ) {
+        Err(error) => assert!(
+            error.malicious_parties().is_none(),
+            "a duplicate share is inconsistent input, not proof that its author cheated"
+        ),
+        Ok(_) => panic!("duplicate signature-share party IDs must be rejected"),
+    }
+}
+
 #[test]
 fn aggregate_commitment_deserialization_enforces_party_invariants() {
     let mut rng = rand::thread_rng();
