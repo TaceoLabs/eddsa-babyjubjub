@@ -11,6 +11,7 @@ use ark_serialize::{CanonicalSerialize, CompressedChecked, Valid};
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroU16;
+use zeroize::Zeroizing;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound(serialize = "", deserialize = ""))]
@@ -79,13 +80,15 @@ impl<C: CurveGroup> SchnorrZkProof<C> {
         transcript_commitments: &[C::Affine],
         rng: &mut R,
     ) -> SchnorrZkProof<C> {
-        let r = C::ScalarField::rand(rng);
-        let big_r = C::generator() * r;
+        // A leaked nonce and the public proof reveal `secret`; also erase the nonce on unwind.
+        let r = Zeroizing::new(C::ScalarField::rand(rng));
+        let big_r = C::generator() * *r;
         let big_r = big_r.into_affine();
 
         let c = Self::challenge_hash(context, party_idx, public, &big_r, transcript_commitments);
 
-        let z = r + c * secret;
+        let z = *r + c * secret;
+        drop(r);
 
         SchnorrZkProof {
             big_r: CompressedChecked(big_r),
