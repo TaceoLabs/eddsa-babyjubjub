@@ -20,8 +20,7 @@ const AGREEMENT_DIGEST_LABEL: &[u8] = b"TACEO_THRESHOLD_EDDSA_AGREEMENT_V1";
 /// caller must pass the party count and threshold itself, and a wrong-but-self-consistent value is
 /// accepted silently: `sign_round` derives the Lagrange coefficient from the signer set, so a too
 /// small threshold only loosens the minimum-signer-set check and a too large party count only
-/// loosens the range check. Neither enables a forgery, but neither is caught either. After a reshare,
-/// pass the *new* parameters.
+/// loosens the range check. Neither enables a forgery, but neither is caught either.
 #[expect(
     clippy::exhaustive_structs,
     reason = "Only carries the results of the protocol - not planned to add something"
@@ -37,11 +36,7 @@ pub struct Finished<C: CurveGroup> {
     pub pk_shares: HashMap<NonZeroU16, C::Affine>,
     /// The public key belonging to the jointly generated signing key.
     pub pk: C::Affine,
-    /// The parties whose polynomial contributions make up this output, ascending.
-    ///
-    /// For a DKG these are the qualified dealers, in the same index namespace as
-    /// [`Finished::pk_shares`]. For a reshare these are the surviving *old* senders, so they are
-    /// **old**-committee indices while `pk_shares` is keyed by new-party index.
+    /// All participants in this DKG run, ascending. Every participant contributes a polynomial.
     pub contributing_parties: Vec<NonZeroU16>,
 }
 
@@ -51,12 +46,8 @@ impl<C: CurveGroup> Finished<C> {
     /// The per-party `my_idx` and `sk_share` are excluded, so an honest run yields the same digest
     /// everywhere.
     ///
-    /// Comparing this is mandatory after a reshare. Resharing combines the surviving senders as
-    /// `P_S(Z) = Σ_{i∈S} λ_i^S · f_i(Z)`, and every coefficient depends on `S` — but `P_S(0) = sk`
-    /// for *every* valid `S`. Receivers that disagreed on `S` hold points on unrelated polynomials
-    /// while both reconstruct the correct public key, so the public-key check in `finalize` reports
-    /// nothing and the shares silently fail to interpolate. The DKG has no such blind spot: there a
-    /// divergent dealer set changes `pk` itself. Compare digests before erasing the old shares.
+    /// Compare digests before using the generated key to detect inconsistent outputs. This does
+    /// not replace reliable broadcast of round-one commitments or agreement on the parameters.
     #[must_use]
     pub fn agreement_digest(&self) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
