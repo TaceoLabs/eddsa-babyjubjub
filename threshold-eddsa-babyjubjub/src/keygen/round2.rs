@@ -170,6 +170,7 @@ impl<C: CurveGroup> RoundTwo<C> {
             contributing_parties,
             my_idx: self.my_idx,
             context: self.context,
+            threshold: self.params.threshold,
             sk_share: my_secret_key_share,
             pk_shares: public_key_shares,
             pk: public_key.into_affine(),

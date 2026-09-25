@@ -8,19 +8,15 @@ use ark_serialize::CanonicalSerialize;
 use std::{collections::HashMap, num::NonZeroU16};
 use zeroize::Zeroize;
 
-const AGREEMENT_DIGEST_LABEL: &[u8] = b"TACEO_THRESHOLD_EDDSA_AGREEMENT_V1";
+const AGREEMENT_DIGEST_LABEL: &[u8] = b"TACEO_THRESHOLD_EDDSA_AGREEMENT_V2";
 
 /// The state of the DKG protocol after it has finished, holding the results of the protocol.
 ///
 /// Every field except [`Finished::my_idx`] and [`Finished::sk_share`] must be identical at every
 /// honest participant; [`Finished::agreement_digest`] reduces those to one comparable value.
 ///
-/// There is deliberately no conversion to [`DLogShareShamir`](crate::key_share::DLogShareShamir),
-/// because this type does not carry the [`Parameters`](crate::keygen::Parameters) of the run. The
-/// caller must pass the party count and threshold itself, and a wrong-but-self-consistent value is
-/// accepted silently: `sign_round` derives the Lagrange coefficient from the signer set, so a too
-/// small threshold only loosens the minimum-signer-set check and a too large party count only
-/// loosens the range check. Neither enables a forgery, but neither is caught either.
+/// When constructing a [`DLogShareShamir`](crate::key_share::DLogShareShamir), use this output's
+/// `my_idx`, `threshold`, and the length of `contributing_parties` as the key-share metadata.
 #[expect(
     clippy::exhaustive_structs,
     reason = "Only carries the results of the protocol - not planned to add something"
@@ -30,6 +26,8 @@ pub struct Finished<C: CurveGroup> {
     pub my_idx: NonZeroU16,
     /// The opaque session context shared by all parties of this protocol run.
     pub context: Vec<u8>,
+    /// The number of shares required to reconstruct the signing key, as agreed during DKG.
+    pub threshold: NonZeroU16,
     /// This party's Shamir share of the jointly generated signing key.
     pub sk_share: C::ScalarField,
     /// The public counterparts of the secret key shares of all parties, indexed by party index.
@@ -42,7 +40,8 @@ pub struct Finished<C: CurveGroup> {
 
 impl<C: CurveGroup> Finished<C> {
     /// A digest over everything in this output that all participants must agree on: the session
-    /// context, [`Finished::contributing_parties`], [`Finished::pk`], and [`Finished::pk_shares`].
+    /// context, [`Finished::threshold`], [`Finished::contributing_parties`], [`Finished::pk`], and
+    /// [`Finished::pk_shares`].
     /// The per-party `my_idx` and `sk_share` are excluded, so an honest run yields the same digest
     /// everywhere.
     ///
@@ -55,6 +54,7 @@ impl<C: CurveGroup> Finished<C> {
         // The context is variable-length, so length-prefix it to keep the preimage injective.
         hasher.update(&length_prefix(self.context.len()));
         hasher.update(&self.context);
+        hasher.update(&self.threshold.get().to_be_bytes());
 
         // Both collections are variable-length, so length-prefix them to keep the preimage injective.
         hasher.update(&length_prefix(self.contributing_parties.len()));
