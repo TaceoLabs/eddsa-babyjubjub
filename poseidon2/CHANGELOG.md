@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-poseidon2-v0.3.0...taceo-poseidon2-v0.3.1)
+
+### ⚙️ Miscellaneous Tasks
+
+
+- Remove num-bigint as a direct dependency ([#66](https://github.com/TaceoLabs/eddsa-babyjubjub/pull/66)) - ([b08aef6](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/b08aef60184fc20dc1f156e75d2ab2c026afde11))
+
+
 ## [0.3.0](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-poseidon2-v0.2.1...taceo-poseidon2-v0.3.0)
 
 ### 🚜 Refactor
