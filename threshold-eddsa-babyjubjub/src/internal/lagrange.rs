@@ -2,7 +2,9 @@
 //!
 //! Provides functions to compute Lagrange coefficients, evaluate polynomials, and reconstruct secrets from shares.
 
+use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::PrimeField;
+use std::num::NonZeroU16;
 
 /// Computes the Lagrange coefficients for the provided party indices.
 ///
@@ -66,7 +68,6 @@ pub fn single_lagrange_from_coeff<F: PrimeField + From<T>, T: Copy + Eq>(
 ///
 /// # Panics
 /// If the provided polynomial is empty.
-#[cfg(test)]
 pub fn evaluate_poly<F: PrimeField>(poly: &[F], x: F) -> F {
     assert!(!poly.is_empty(), "Poly must not be empty");
     let mut iter = poly.iter().rev();
@@ -76,4 +77,51 @@ pub fn evaluate_poly<F: PrimeField>(poly: &[F], x: F) -> F {
         eval += coeff;
     }
     eval
+}
+
+/// Evaluates a committed polynomial in the exponent at a party index.
+///
+/// The party index is a [`NonZeroU16`], so the evaluation can never silently return the
+/// commitment to the constant term, which is the dealer's secret contribution to the key.
+///
+/// # Panics
+/// Panics if `coefficients` is empty.
+pub fn evaluate_polynomial_in_exponent<C: CurveGroup>(
+    coefficients: &[C::Affine],
+    party_idx: NonZeroU16,
+) -> C {
+    // since the party index is non-zero, this is non zero
+    let x = C::ScalarField::from(party_idx.get());
+
+    assert!(!coefficients.is_empty(), "Poly must not be empty");
+    let mut iter = coefficients.iter().rev();
+    let mut result = iter
+        .next()
+        .expect("Checked that not empty")
+        .to_owned()
+        .into_group();
+
+    // evaluate the poly using Horner's algorithm
+    for coeff in iter {
+        result *= &x;
+        result += coeff;
+    }
+
+    result
+}
+
+/// Checks a private polynomial evaluation against the public coefficient commitments.
+///
+/// An empty commitment vector is rejected rather than evaluated, and the non-zero party index
+/// guarantees a share can never verify against the constant term alone.
+pub fn verify_polynomial_evaluation<C: CurveGroup>(
+    commitments: &[C::Affine],
+    party_idx: NonZeroU16,
+    share: &C::ScalarField,
+) -> bool {
+    if commitments.is_empty() {
+        return false;
+    }
+    let result = evaluate_polynomial_in_exponent::<C>(commitments, party_idx);
+    result == C::generator() * share
 }

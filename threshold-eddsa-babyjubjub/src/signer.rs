@@ -143,6 +143,7 @@ impl EdDSASession {
         let parties = &contributing_parties;
         EdDSACommitments::validate_party_ids(parties)?;
         if x_share.party_id > x_share.number_of_parties
+            || x_share.threshold.get() < 2
             || x_share.threshold > x_share.number_of_parties
         {
             eyre::bail!("invalid Shamir key-share metadata");
