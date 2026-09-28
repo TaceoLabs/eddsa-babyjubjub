@@ -236,7 +236,9 @@ impl EdDSASignature {
     }
 }
 
-fn challenge_hash(message: BaseField, nonce_r: Affine, pk: Affine) -> BaseField {
+/// The challenge hash for the `EdDSA` signature scheme, using Poseidon2 as the internal hash function for the Fiat-Shamir transform.
+#[must_use]
+pub fn challenge_hash(message: BaseField, nonce_r: Affine, pk: Affine) -> BaseField {
     poseidon2::bn254::t8::permutation(&[
         EdDSASignature::get_chall_ds(), // Domain separator in capacity element
         nonce_r.x,
@@ -249,8 +251,9 @@ fn challenge_hash(message: BaseField, nonce_r: Affine, pk: Affine) -> BaseField 
     ])[1]
 }
 
-// This is just a modular reduction. We show in the docs why this does not introduce a bias when applied to a uniform element of the base field.
-pub(crate) fn convert_base_to_scalar(f: BaseField) -> ScalarField {
+/// This is just a modular reduction. We show in the docs why this does not introduce a bias when applied to a uniform element of the base field.
+#[must_use]
+pub fn convert_base_to_scalar(f: BaseField) -> ScalarField {
     let bytes = f.into_bigint().to_bytes_le();
     ScalarField::from_le_bytes_mod_order(&bytes)
 }
