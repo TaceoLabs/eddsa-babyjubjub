@@ -1,6 +1,6 @@
 # Threshold EdDSA over Baby Jubjub
 
-Threshold signing and distributed key generation for the
+Threshold signing, distributed key generation, and key resharing for the
 Poseidon2-based Baby Jubjub EdDSA implementation in
 [`taceo-eddsa-babyjubjub`](../eddsa-babyjubjub).
 
@@ -12,9 +12,13 @@ existing single-party `EdDSAPublicKey::verify` API. The distributed key
 generation (DKG) protocol uses Feldman commitments and Schnorr proofs of
 possession, following the abort-on-error model of
 [`frost-core` key generation](https://docs.rs/frost-core/3.0.0/frost_core/keys/dkg/index.html).
+The resharing protocol follows the PedPoP-based reshare algorithm in the
+[TACEO OPRF protocol documentation](https://github.com/TaceoLabs/oprf-service/tree/main/docs),
+adopting the same abort-on-error model in place of that document's public
+complaint round.
 
 > [!WARNING]
-> **Key generation requires reliable broadcast for the messages
+> **Key generation and resharing require reliable broadcast for the messages
 > marked “reliable broadcast” below.** Sending a message separately to every
 > participant is not sufficient: a malicious sender must not be able to make
 > two honest participants accept different messages for the same protocol step.
@@ -36,6 +40,8 @@ possession, following the abort-on-error model of
 - Poseidon2 for the final EdDSA Fiat-Shamir challenge.
 - Signature-share aggregation with optional identifiable abort.
 - Dealerless DKG requiring valid contributions from every configured participant.
+- Resharing to a different party set and/or threshold without changing or
+  reconstructing the signing key.
 - Serde support for protocol messages and zeroization of secret state on drop.
 
 The package name is `taceo-threshold-eddsa-babyjubjub`. The crate currently
@@ -62,6 +68,10 @@ under the wrong ID lets its sender speak, and be blamed, as someone else.
 | DKG round-one polynomial commitments and proof of possession | **Reliable broadcast to every DKG party** | All honest parties must use the same commitments and derive the same public key and public-key shares. |
 | DKG round-two polynomial evaluations | **Private, authenticated point-to-point channel** | Each evaluation is a secret intended only for its recipient. |
 | DKG restarts | **Agreement on a fresh session and participant set** | Discard an aborted run and generate fresh polynomials before retrying. |
+| Reshare sender set, old/new parameters, public key, public-key shares, and session context | **Global agreement before starting** | Every old sender and new receiver must execute the same handover. |
+| Reshare polynomial commitments and proof of possession | **Reliable broadcast from each selected old sender to every new party** | A sender must not equivocate about the polynomial against which private evaluations are checked. |
+| Reshare polynomial evaluations | **Private, authenticated point-to-point channel** | Each new party receives a different secret evaluation. |
+| Reshare restarts | **Agreement on a fresh session and sender set** | Discard an aborted run and generate fresh polynomials before retrying. |
 
 The authenticated channels must also be replay-protected and bind each message
 to its protocol, session, sender, and recipient. DKG round-one proofs bind the
@@ -112,9 +122,9 @@ signers                         aggregator
 
 Party IDs, the committee size, and the signing threshold are `NonZeroU16`
 values, so a zero ID is unrepresentable and rejected already during
-deserialization. DKG parameters and signing key shares require `2 <= t <= n`;
-construction and deserialization reject threshold one, which would give every
-participant the complete signing key.
+deserialization. DKG parameters, both old and new resharing parameters, and
+signing key shares require `2 <= t <= n`; construction and deserialization
+reject threshold one, which would give every participant the complete signing key.
 
 We recommend limiting the total committee size `n` to **128 participants**,
 following the [FROST3 signing draft (BIP 445)](https://github.com/siv2r/bip-frost-signing#footnotes),
@@ -127,8 +137,8 @@ guarantees for Baby Jubjub requires a separate analysis.
 
 Commitments and signature shares carry party IDs, and public-key shares used
 for identifiable abort are supplied in a `BTreeMap<NonZeroU16, Affine>`. The map must
-come from an authenticated, immutable source such as the DKG output; the type
-system cannot
+come from an authenticated, immutable source such as the DKG or reshare output;
+the type system cannot
 authenticate application-provided public-key metadata. Prefer
 `sign_agg_with_identifiable_abort` when an invalid share must be attributed;
 plain `sign_agg` only combines shares and may therefore return a signature that
@@ -147,19 +157,11 @@ rejects zero secret shares, out-of-range metadata, and a small-order public key;
 deserialization enforces the same invariants, so a persisted share cannot be
 loaded with its binding altered.
 
-The final threshold signature is an
-`eddsa_babyjubjub::EdDSASignature` and is verified exactly like a regular
-signature:
-
-```rust,ignore
-let valid = public_key.verify(message, &signature);
-```
-
 ### Nonce and session safety
 
 `EdDSASession` deliberately cannot be cloned and `sign_round` consumes it.
-Never reuse or restore its nonce state. Secret-key shares and DKG polynomial
-evaluations must be stored and transported as secrets.
+Never reuse or restore its nonce state. Secret-key shares and DKG or reshare
+polynomial evaluations must be stored and transported as secrets.
 
 `sign_round` and the aggregation APIs take an opaque `context: &[u8]` that is
 mixed into the nonce-binding hash. Every participant of one session must use
@@ -190,13 +192,14 @@ sharing whose polynomial degree is `t - 1`; any `t` resulting shares can sign.
 Note that the source protocol document uses `t` for the polynomial _degree_
 instead, so its `t` maps to `Parameters::new(n, t + 1)` here.
 
-Key generation takes an opaque session context (`context: &[u8]`) that must be
-globally unique per run, not merely agreed. The context is the only run-specific
-input to the proof-of-possession context, so reusing it with the same parameters
-makes round-one broadcasts replayable: an adversary with network control can
-suppress an honest party's fresh broadcast, inject its stale one from the earlier
-run, and have that party's fresh private evaluations fail against the stale
-commitments — which incorrectly implicates an honest party and aborts the run. Use fresh
+Key generation and resharing take an opaque session context (`context: &[u8]`)
+that must be globally unique per run, not merely agreed. The context is the only
+run-specific input to the proof-of-possession context, so reusing it with the
+same parameters makes round-one broadcasts replayable: an adversary with network
+control can suppress an honest party's fresh broadcast, inject its stale one from
+the earlier run, and have that party's fresh private evaluations fail against the
+stale commitments — which incorrectly implicates an honest party and aborts the
+run. Use fresh
 random bytes per run and never derive the context from configuration alone.
 The context is not carried in the protocol
 messages: a party running with a different context fails proof verification at
@@ -238,24 +241,87 @@ introduce further bias. Schnorr proofs prevent rogue-key attacks; they do not
 force independently chosen contributions. Applications needing unbiased
 randomness require a protocol designed for that guarantee.
 
+## Resharing
+
+Resharing replaces the Shamir sharing while preserving the secret key and
+public key. It can change `n`, change `t`, rotate participants, or refresh shares
+for the same configuration. Both the old and new `Parameters` require
+`2 <= t <= n`.
+
+> [!WARNING]
+> Resharing does not cryptographically revoke or erase the old shares. During
+> handover, both the old and new sharings authorize the same public key. After
+> every honest participant has durably committed to the same successful new
+> epoch, securely erase the old shares and make honest signers reject stale
+> epoch/session coordination. Epoch checks alone cannot stop an attacker that
+> has retained an old threshold. Proactive security across refreshes requires
+> secure erasure and fewer than the threshold shares being compromised in each
+> epoch; otherwise retained shares can accumulate across epochs.
+
+1. All participants first agree on identical old and new `Parameters`, the old
+   public key, a fresh session context, and a selected old-party sender set containing
+   at least the old threshold. Build it with
+   `ReShareSenderSet::for_pk_and_parameters`, `add_party`, and `correct`.
+2. Each selected old party creates a `ReShareProtocolSender`. Its polynomial
+   commitment from `get_broadcast_message()` requires reliable broadcast to all
+   new parties. Its `get_party_communication(new_party)` result is delivered
+   privately to that new party. These two deliveries may happen in parallel.
+3. Each new party creates a `ReShareProtocolReceiver`, adds every selected old
+   sender's broadcast and private message with
+   `add_old_party_communication`, and calls `finalize()`.
+
+Like the DKG, resharing follows an abort-on-error model. Every selected old
+sender must contribute a valid broadcast and a valid private evaluation to every
+new party. An invalid contribution aborts the run. A missing contribution
+prevents advancement; abort if the application's delivery deadline expires.
+There is no participant-exclusion, complaint, or public share-revelation API.
+Never publish private evaluations to recover from a timeout: the constant term
+of a sender's resharing polynomial is its own secret key share, so its revealed
+evaluations, combined with evaluations already held by corrupt new parties, can
+disclose that share.
+
+To retry, discard the old state, agree on the new sender set (and parameters, if
+they changed), and start a new run with fresh randomness and a fresh context. A
+failure identifies a sender locally when a cryptographic check fails; it does
+not produce a publicly verifiable proof of private delivery. A timeout alone is
+not proof that its sender acted maliciously.
+
+Do not let each receiver choose its own sender set, and note that **the
+public-key check cannot detect a violation**. Resharing combines the selected
+senders as `P_S(Z) = Σ_{i∈S} λ_i^S · f_i(Z)`; every Lagrange coefficient depends
+on the selected set `S`, but `P_S(0)` is the signing key for _every_ valid `S`.
+Receivers that disagreed on `S` therefore hold points on unrelated polynomials
+while both reconstruct the correct public key, so `finalize` succeeds on both
+sides and the shares silently fail to interpolate. The DKG has no such blind
+spot: there a divergent dealer set changes the public key itself.
+
+Compare `Finished::agreement_digest()` across all receivers and treat any
+mismatch as a failed run **before** erasing the old shares. The digest covers the
+session context, `threshold`, `contributing_parties`, `pk`, and `pk_shares` — everything
+that must agree — and excludes the per-party `my_idx` and `sk_share`. The selected sender
+set is also reported directly as `Finished::contributing_parties`; for a reshare
+these are old-committee indices, whereas `pk_shares` is keyed by new-party index.
+
 ## Outputs and interoperability
 
-DKG returns `keygen::finished::Finished<C>`. For Baby Jubjub, use
+DKG and reshare return `keygen::finished::Finished<C>`. For Baby Jubjub, use
 `ark_babyjubjub::EdwardsProjective` as `C`. Its `sk_share` can be converted into
 `key_share::DLogShareShamir` for signing by binding the share to its party
 ID, total party count, and threshold; `pk` and `pk_shares` supply the public
 values required for verification and identifiable abort.
 Use `Finished::my_idx` and `Finished::threshold` for the signing-share identity
-and threshold. `contributing_parties` names all participants in the run, so its
-length supplies the total party count. `agreement_digest()` reduces every value
-that must agree across participants, including the threshold, to one comparable
-32-byte hash.
+and threshold, and the length of `Finished::pk_shares` for the total party count.
+After a reshare, these describe the new committee. `contributing_parties` names
+all DKG participants or the selected old senders of a reshare.
+`agreement_digest()` reduces every value that must agree across participants,
+including the threshold, to one comparable 32-byte hash.
 
 ## Error attribution
 
-The message-intake APIs — `RoundOne::add_party_communication` and
-`RoundTwo::add_party_communication` — return `keygen::MessageError`, which
-keeps three outcomes apart:
+The message-intake APIs — `RoundOne::add_party_communication`,
+`RoundTwo::add_party_communication`, and
+`ReShareProtocolReceiver::add_old_party_communication` — return
+`keygen::MessageError`, which keeps three outcomes apart:
 
 - `MaliciousParty` attributes a failed cryptographic check to the authenticated
   sender, assuming all parties agreed on parameters and context.
@@ -271,6 +337,14 @@ Use `MessageError::attributable_parties()` to inspect local attribution. The
 `Display` output retains the relevant party IDs. Abort after a rejected protocol
 contribution and investigate its cause before deciding which participants to
 include in a fresh run.
+
+The final threshold signature is an
+`eddsa_babyjubjub::EdDSASignature` and is verified exactly like a regular
+signature:
+
+```rust,ignore
+let valid = public_key.verify(message, &signature);
+```
 
 ## References
 

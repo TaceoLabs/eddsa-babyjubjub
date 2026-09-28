@@ -19,6 +19,7 @@ pub mod error;
 mod internal;
 pub mod key_share;
 pub mod keygen;
+pub mod reshare;
 pub mod signer;
 #[cfg(test)]
 mod tests;
