@@ -8,7 +8,7 @@ description = "A threshold EdDSA signature scheme implementation over the Baby J
 readme = "./README.md"
 repository.workspace = true
 license.workspace = true
-publish = true
+publish = false
 
 [dependencies]
 ark-babyjubjub = { package = "taceo-ark-babyjubjub", path = "../ark-babyjubjub", version = "0.6.0" }
