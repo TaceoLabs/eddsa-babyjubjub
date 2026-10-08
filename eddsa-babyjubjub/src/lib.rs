@@ -2,7 +2,7 @@
 
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{AdditiveGroup, BigInteger, PrimeField, Zero};
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress, Validate};
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -194,7 +194,9 @@ impl EdDSAPublicKey {
 )]
 pub struct EdDSASignature {
     /// The nonce point of the signature.
-    #[serde(with = "ark_serde_compat::babyjubjub::affine")]
+    ///
+    /// Only required to be on the curve, not in the prime-order subgroup.
+    #[serde(with = "nonce_point")]
     pub r: Affine,
     /// The scalar part of the signature.
     #[serde(with = "ark_serde_compat::field")]
@@ -224,12 +226,44 @@ impl EdDSASignature {
 
     /// Parse the signature from a byte array.
     ///
+    /// The nonce point `R` must decode from a canonical field element and lie on the curve, but
+    /// it is not required to lie in the prime-order subgroup: the cofactored verification
+    /// equation accepts such signatures.
+    ///
     /// # Errors
-    /// Returns an error if `bytes` does not encode a valid compressed point and scalar.
+    /// Returns an error if `bytes` does not encode a canonical on-curve point and a canonical scalar.
     pub fn from_compressed_bytes(bytes: [u8; 64]) -> eyre::Result<Self> {
-        let r = Affine::deserialize_compressed(&bytes[0..32])?;
+        let r = Affine::deserialize_with_mode(&bytes[0..32], Compress::Yes, Validate::No)?;
+        eyre::ensure!(r.is_on_curve(), "signature nonce point is not on the curve");
         let s: ScalarField = ScalarField::deserialize_compressed(&bytes[32..64])?;
         Ok(Self { r, s })
+    }
+}
+
+/// Serde helpers for the signature nonce point `R`.
+///
+/// Serialization matches [`ark_serde_compat::babyjubjub::affine`]. Deserialization only checks
+/// that the point is on the curve, not that it lies in the prime-order subgroup, matching
+/// [`EdDSASignature::from_compressed_bytes`].
+mod nonce_point {
+    use super::Affine;
+    use serde::{Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(p: &Affine, serializer: S) -> Result<S::Ok, S::Error> {
+        ark_serde_compat::babyjubjub::serialize_affine(p, serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Affine, D::Error> {
+        let p = ark_serde_compat::babyjubjub::deserialize_affine_unchecked(deserializer)?;
+        if p.is_on_curve() {
+            Ok(p)
+        } else {
+            Err(serde::de::Error::custom(
+                "signature nonce point is not on the curve",
+            ))
+        }
     }
 }
 
@@ -259,7 +293,7 @@ pub fn convert_base_to_scalar(f: BaseField) -> ScalarField {
 mod tests {
     use super::*;
     use ark_ec::AffineRepr;
-    use ark_ff::UniformRand;
+    use ark_ff::{One, UniformRand};
     use std::str::FromStr;
 
     fn test(sk: [u8; 32], message: BaseField, rng: &mut impl rand::Rng) {
@@ -453,5 +487,72 @@ mod tests {
             pk_prime.verify(message, &signature_prime),
             "roundtripped signature should still verify"
         );
+    }
+
+    /// Builds the verification-only vector: `pk = G`, `R = G + (0, -1)`,
+    /// message `42`. `R` is on the curve but not in the prime-order subgroup.
+    fn non_subgroup_r_vector() -> (EdDSAPublicKey, BaseField, EdDSASignature) {
+        let g = Affine::generator();
+        let torsion = Affine::new_unchecked(BaseField::zero(), -BaseField::one());
+        let r = (g + torsion).into_affine();
+        assert!(r.is_on_curve());
+        assert!(!r.is_in_correct_subgroup_assuming_on_curve());
+        let message = BaseField::from(42u64);
+        let e = convert_base_to_scalar(challenge_hash(message, r, g));
+        assert_eq!(
+            e,
+            ScalarField::from_str(
+                "14107477924306369449585376693150860508714550631015857449267997894818346434634"
+            )
+            .expect("Is in ScalarField"),
+            "challenge should match"
+        );
+        let s = ScalarField::from_str(
+            "427326129406822435681373102365063578330480770223021153266919590076109569430",
+        )
+        .expect("Is in ScalarField");
+        (EdDSAPublicKey { pk: g }, message, EdDSASignature { r, s })
+    }
+
+    #[test]
+    fn test_non_subgroup_r_verifies() {
+        let (pk, message, signature) = non_subgroup_r_vector();
+        assert!(
+            pk.verify(message, &signature),
+            "cofactored verification must accept R outside the prime-order subgroup"
+        );
+        assert!(
+            !pk.verify(BaseField::from(43u64), &signature),
+            "signature must not verify for a different message"
+        );
+    }
+
+    #[test]
+    fn test_non_subgroup_r_from_compressed_bytes() {
+        let (pk, message, signature) = non_subgroup_r_vector();
+        let bytes = signature
+            .to_compressed_bytes()
+            .expect("signature serializes");
+        let parsed = EdDSASignature::from_compressed_bytes(bytes)
+            .expect("R outside the prime-order subgroup must be accepted when parsing");
+        assert_eq!(parsed, signature);
+        assert!(pk.verify(message, &parsed));
+    }
+
+    #[test]
+    fn test_non_subgroup_r_serde() {
+        let (pk, message, signature) = non_subgroup_r_vector();
+        let json = serde_json::to_string(&signature).expect("signature serializes");
+        let parsed: EdDSASignature = serde_json::from_str(&json)
+            .expect("R outside the prime-order subgroup must be accepted when deserializing");
+        assert_eq!(parsed, signature);
+        assert!(pk.verify(message, &parsed));
+    }
+
+    #[test]
+    fn test_serde_rejects_off_curve_r() {
+        let json = r#"{"r":["1","1"],"s":"1"}"#;
+        let parsed: Result<EdDSASignature, _> = serde_json::from_str(json);
+        assert!(parsed.is_err(), "R not on the curve must be rejected");
     }
 }
