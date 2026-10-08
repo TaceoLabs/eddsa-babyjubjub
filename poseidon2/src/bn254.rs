@@ -71,7 +71,7 @@ mod test {
     >(
         poseidon2_perm: &'static Poseidon2Permutation<F, T, D, ROUNDS_F, ROUNDS_P>,
     ) {
-        let mut rng = &mut thread_rng();
+        let mut rng = thread_rng();
         let input1: Vec<F> = (0..T).map(|_| F::rand(&mut rng)).collect();
         let mut input2 = input1.clone();
         input2.rotate_right(T / 2);

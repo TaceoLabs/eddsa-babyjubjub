@@ -476,7 +476,7 @@ fn reshare_requires_every_selected_sender() {
                 .expect("valid new receiver"),
         )
         .expect_err("duplicate delivery cannot replace a missing sender");
-    assert!(error.attributable_parties().is_empty());
+    assert_eq!(error.attributable_parties(), []);
     assert_eq!(receiver.get_missing_parties(), vec![nz(2)]);
     assert!(
         !receiver.can_advance(),

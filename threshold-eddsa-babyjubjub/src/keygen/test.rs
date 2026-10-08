@@ -385,7 +385,7 @@ fn round_one_requires_every_configured_participant() {
     let error = receiver
         .add_party_communication(nz(2), broadcast)
         .expect_err("duplicate delivery cannot replace a missing participant");
-    assert!(error.attributable_parties().is_empty());
+    assert_eq!(error.attributable_parties(), []);
     assert_eq!(receiver.get_missing_parties(), vec![nz(3)]);
     assert!(
         !receiver.can_advance(),
@@ -410,7 +410,7 @@ fn round_two_requires_every_configured_participant() {
     let error = receiver
         .add_party_communication(nz(2), &share)
         .expect_err("duplicate delivery cannot replace a missing participant");
-    assert!(error.attributable_parties().is_empty());
+    assert_eq!(error.attributable_parties(), []);
     assert_eq!(receiver.get_missing_parties(), vec![nz(3)]);
     assert!(
         !receiver.can_advance(),
