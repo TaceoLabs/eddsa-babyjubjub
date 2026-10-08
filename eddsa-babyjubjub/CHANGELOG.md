@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [0.6.1](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-eddsa-babyjubjub-v0.6.0...taceo-eddsa-babyjubjub-v0.6.1)
+
+### ⛰️ Features
+
+
+- Threshold EdDSA signing over Baby Jubjub (FROST3) ([#63](https://github.com/TaceoLabs/eddsa-babyjubjub/pull/63)) - ([a3babf3](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/a3babf3f29136a76e9484efe6d15299811bc71b5))
+
+### 🐛 Bug Fixes
+
+
+- Allow non-subgroup R when parsing the signature - ([9ac6d4d](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/9ac6d4d0ad952e5eb2b6cea3a07047afcabc568c))
+
+### 🧪 Testing
+
+
+- Add KATs for eddsa-babyjubjub ([#46](https://github.com/TaceoLabs/eddsa-babyjubjub/pull/46)) - ([fd20b93](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/fd20b938fa4b9f9474a5a3a2d8bfde6fb0f360e6))
+
+### ⚙️ Miscellaneous Tasks
+
+
+- Remove num-bigint as a direct dependency ([#66](https://github.com/TaceoLabs/eddsa-babyjubjub/pull/66)) - ([b08aef6](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/b08aef60184fc20dc1f156e75d2ab2c026afde11))
+
+
 ## [0.6.0](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-eddsa-babyjubjub-v0.5.5...taceo-eddsa-babyjubjub-v0.6.0)
 
 ### 🚜 Refactor

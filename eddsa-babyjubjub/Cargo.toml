@@ -1,6 +1,6 @@
 [package]
 name = "taceo-eddsa-babyjubjub"
-version = "0.6.0"
+version = "0.6.1"
 edition.workspace = true
 # Higher than the workspace MSRV: `taceo-ark-serde-compat` 0.6 requires 1.90.
 rust-version = "1.90"
@@ -18,7 +18,7 @@ ark-serde-compat = { workspace = true }
 ark-serialize = { workspace = true }
 blake3 = { workspace = true }
 eyre = { workspace = true }
-poseidon2 = { package = "taceo-poseidon2", path = "../poseidon2", version = "0.3.0", default-features = false, features = [
+poseidon2 = { package = "taceo-poseidon2", path = "../poseidon2", version = "0.3.1", default-features = false, features = [
   "bn254",
   "t8"
 ] }
