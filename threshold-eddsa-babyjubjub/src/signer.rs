@@ -17,7 +17,7 @@ use ark_serde_compat::babyjubjub;
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroU16;
-use zeroize::ZeroizeOnDrop;
+use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 /// Per-party commitments to the distributed `EdDSA` signature protocol.
 ///
@@ -184,9 +184,13 @@ impl EdDSASession {
 
         // The following modular reduction in convert_base_to_scalar is required in rust to perform the scalar multiplications. Using all 254 bits of the base field in a double/add ladder would apply this reduction implicitly. We show in the docs of convert_base_to_scalar why this does not introduce a bias when applied to a uniform element of the base field.
         let c_ = eddsa_babyjubjub::convert_base_to_scalar(c);
-        Ok(EdDSASigShare(
-            x_share.party_id,
-            self.d + b * self.e + lagrange_coefficient * c_ * x_share.value,
-        ))
+        // s = d + b * e + lambda * c * x, with every secret intermediate erased or overwritten
+        let mut key_term = Zeroizing::new(x_share.value);
+        *key_term *= lagrange_coefficient * c_;
+        let mut s = self.e;
+        s *= b;
+        s += self.d;
+        s += *key_term;
+        Ok(EdDSASigShare(x_share.party_id, s))
     }
 }
