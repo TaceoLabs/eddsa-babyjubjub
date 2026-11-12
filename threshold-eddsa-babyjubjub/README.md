@@ -178,9 +178,12 @@ abort on crossed sessions that a unique per-session context provides.
 
 ### Side-channel limitations
 
-The Baby Jubjub implementation uses arkworks curve and field arithmetic. The
-arkworks 0.6 scalar-multiplication implementation is not guaranteed to be
-constant-time and includes secret-dependent control flow. Consequently, this
+The Baby Jubjub implementation uses arkworks curve and field arithmetic.
+`taceo-ark-babyjubjub` replaces the arkworks scalar multiplication with a
+Montgomery ladder that performs the same sequence of group operations for every
+scalar, but this is a best-effort mitigation: the arkworks 0.6 field arithmetic
+underneath is not constant-time, and the ladder's masked selects are not
+guaranteed to survive compilation as branch-free code. Consequently, this
 crate must not be treated as resistant to local timing, cache, branch-trace,
 power, or similar side-channel attackers. Deploy it only where that threat is
 excluded or use a separately reviewed constant-time arithmetic backend.

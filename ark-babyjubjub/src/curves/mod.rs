@@ -49,7 +49,10 @@ impl TECurveConfig for EdwardsConfig {
     type MontCurveConfig = EdwardsConfig;
 
     /// We override this since the default implementation uses double-and-add and skips all leading zero bits of the scalar,
-    /// which is not constant time. This implementation uses the same amount of instructions regardless of the scalar, at the cost of performance.
+    /// which is not constant time. This Montgomery ladder performs the same sequence of group operations regardless of the scalar, at the cost of performance.
+    ///
+    /// This is a best-effort mitigation, not a constant-time guarantee: the underlying arkworks field arithmetic
+    /// is not constant time, and the compiler is free to turn the masked selects below back into branches.
     fn mul_projective(base: &Projective<Self>, scalar: &[u64]) -> Projective<Self> {
         let mut r0 = Projective::<Self>::zero();
         let mut r1 = *base;
@@ -94,7 +97,7 @@ pub const GENERATOR_Y: Fq =
 // Helper functions for constant-time conditional swap and select, used in the montgomery ladder implementation.
 #[inline(always)]
 fn conditional_swap(a: &mut EdwardsProjective, b: &mut EdwardsProjective, c: bool) {
-    let mask = (c as u64).wrapping_neg(); // all 1s if c is true, all 0s if c is false
+    let mask = mask_from_bit(c);
     conditionally_swap_bigint(&mut a.x.0, &mut b.x.0, mask);
     conditionally_swap_bigint(&mut a.y.0, &mut b.y.0, mask);
     conditionally_swap_bigint(&mut a.z.0, &mut b.z.0, mask);
@@ -103,11 +106,20 @@ fn conditional_swap(a: &mut EdwardsProjective, b: &mut EdwardsProjective, c: boo
 
 #[inline(always)]
 fn conditional_select(a: &mut EdwardsProjective, b: &EdwardsProjective, c: bool) {
-    let mask = (c as u64).wrapping_neg(); // all 1s if c is true, all 0s if c is false
+    let mask = mask_from_bit(c);
     conditionally_select_bigint(&mut a.x.0, b.x.0, mask);
     conditionally_select_bigint(&mut a.y.0, b.y.0, mask);
     conditionally_select_bigint(&mut a.z.0, b.z.0, mask);
     conditionally_select_bigint(&mut a.t.0, b.t.0, mask);
+}
+
+/// Returns all 1s if `c` is true and all 0s otherwise.
+///
+/// The `black_box` hides the mask's origin from the optimizer, discouraging it from
+/// replacing the masked operations with a branch on the secret bit.
+#[inline(always)]
+fn mask_from_bit(c: bool) -> u64 {
+    core::hint::black_box((c as u64).wrapping_neg())
 }
 
 #[inline(always)]
