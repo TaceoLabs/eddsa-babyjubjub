@@ -244,27 +244,24 @@ impl<C: CurveGroup> ReShareProtocolReceiver<C> {
         let mut public_key_shares = HashMap::new();
         public_key_shares.insert(self.my_idx, my_public_key_share);
 
+        // Commitments to the Lagrange-weighted joint polynomial, so it is evaluated once per party.
+        let joint_commitments = lagrange::sum_committed_polynomials::<C>(
+            self.received_shares.iter().map(|(party, (_, com))| {
+                let lambda = lagrange_coeffs[party];
+                com.iter().map(move |coeff| *coeff * lambda)
+            }),
+        );
+
         for party_idx in self.reshare_senders.new_parameters.party_indices() {
             if party_idx == self.my_idx {
                 continue;
             }
-            let pk_share = self
-                .received_shares
-                .iter()
-                .fold(C::zero(), |acc, (party, (_, com))| {
-                    acc + lagrange::evaluate_polynomial_in_exponent::<C>(com, party_idx)
-                        * lagrange_coeffs[party]
-                });
+            let pk_share =
+                lagrange::evaluate_polynomial_in_exponent::<C>(&joint_commitments, party_idx);
             public_key_shares.insert(party_idx, pk_share.into_affine());
         }
 
-        let public_key = self
-            .received_shares
-            .iter()
-            .fold(C::zero(), |acc, (party, (_, com))| {
-                acc + com[0] * lagrange_coeffs[party]
-            });
-        let public_key = public_key.into_affine();
+        let public_key = joint_commitments[0];
         if public_key != self.reshare_senders.pk {
             eyre::bail!(
                 "ReShare protocol failed, recombined pk does not match: {:?} != {:?}",
