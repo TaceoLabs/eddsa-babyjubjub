@@ -111,6 +111,24 @@ pub fn evaluate_polynomial_in_exponent<C: CurveGroup>(
     result
 }
 
+/// Sums committed polynomials coefficient-wise, yielding the commitments to their sum.
+///
+/// Evaluating the result once per party replaces one evaluation per party and polynomial.
+pub fn sum_committed_polynomials<C: CurveGroup>(
+    polynomials: impl IntoIterator<Item = impl IntoIterator<Item = C>>,
+) -> Vec<C::Affine> {
+    let mut sum = Vec::<C>::new();
+    for polynomial in polynomials {
+        for (i, coeff) in polynomial.into_iter().enumerate() {
+            match sum.get_mut(i) {
+                Some(acc) => *acc += coeff,
+                None => sum.push(coeff),
+            }
+        }
+    }
+    C::normalize_batch(&sum)
+}
+
 /// Checks a private polynomial evaluation against the public coefficient commitments.
 ///
 /// An empty commitment vector is rejected rather than evaluated, and the non-zero party index

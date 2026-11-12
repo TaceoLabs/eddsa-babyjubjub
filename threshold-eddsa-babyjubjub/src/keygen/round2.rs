@@ -147,20 +147,23 @@ impl<C: CurveGroup> RoundTwo<C> {
         let mut public_key_shares = HashMap::new();
         public_key_shares.insert(self.my_idx, my_public_key_share);
 
+        // Commitments to the joint polynomial, so it is evaluated once per party.
+        let joint_commitments = lagrange::sum_committed_polynomials::<C>(
+            self.commitments
+                .values()
+                .map(|poly| poly.iter().map(|coeff| (*coeff).into())),
+        );
+
         for party_idx in self.params.party_indices() {
             if party_idx == self.my_idx {
                 continue;
             }
-            let pk_share = self.commitments.values().fold(C::zero(), |acc, x| {
-                acc + lagrange::evaluate_polynomial_in_exponent::<C>(x, party_idx)
-            });
+            let pk_share =
+                lagrange::evaluate_polynomial_in_exponent::<C>(&joint_commitments, party_idx);
             public_key_shares.insert(party_idx, pk_share.into_affine());
         }
 
-        let public_key = self
-            .commitments
-            .values()
-            .fold(C::zero(), |acc, x| acc + x[0]);
+        let public_key = joint_commitments[0];
 
         // `commitments` is a `HashMap`; sort so the reported set is comparable across parties.
         let mut contributing_parties = self.commitments.keys().copied().collect::<Vec<_>>();
@@ -173,7 +176,7 @@ impl<C: CurveGroup> RoundTwo<C> {
             threshold: self.params.threshold,
             sk_share: my_secret_key_share,
             pk_shares: public_key_shares,
-            pk: public_key.into_affine(),
+            pk: public_key,
         })
     }
 }
