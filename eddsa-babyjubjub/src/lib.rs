@@ -231,12 +231,18 @@ impl EdDSASignature {
     /// equation accepts such signatures.
     ///
     /// # Errors
-    /// Returns an error if `bytes` does not encode a canonical on-curve point and a canonical scalar.
+    /// Returns an error if `bytes` is not the canonical encoding of an on-curve point and a scalar.
     pub fn from_compressed_bytes(bytes: [u8; 64]) -> eyre::Result<Self> {
         let r = Affine::deserialize_with_mode(&bytes[0..32], Compress::Yes, Validate::No)?;
         eyre::ensure!(r.is_on_curve(), "signature nonce point is not on the curve");
         let s: ScalarField = ScalarField::deserialize_compressed(&bytes[32..64])?;
-        Ok(Self { r, s })
+        let signature = Self { r, s };
+        // Points with x = 0 decode under either sign flag; accept only the canonical one.
+        eyre::ensure!(
+            signature.to_compressed_bytes()? == bytes,
+            "signature encoding is not canonical"
+        );
+        Ok(signature)
     }
 }
 
@@ -537,6 +543,29 @@ mod tests {
             .expect("R outside the prime-order subgroup must be accepted when parsing");
         assert_eq!(parsed, signature);
         assert!(pk.verify(message, &parsed));
+    }
+
+    #[test]
+    fn test_from_compressed_bytes_rejects_non_canonical_r() {
+        for r in [
+            Affine::zero(),
+            Affine::new_unchecked(BaseField::zero(), -BaseField::one()),
+        ] {
+            let signature = EdDSASignature {
+                r,
+                s: ScalarField::one(),
+            };
+            let mut bytes = signature
+                .to_compressed_bytes()
+                .expect("signature serializes");
+            EdDSASignature::from_compressed_bytes(bytes).expect("canonical encoding is accepted");
+            // flip the x sign flag, which is meaningless for x = 0
+            bytes[31] ^= 0x80;
+            assert!(
+                EdDSASignature::from_compressed_bytes(bytes).is_err(),
+                "non-canonical encoding of R must be rejected"
+            );
+        }
     }
 
     #[test]
