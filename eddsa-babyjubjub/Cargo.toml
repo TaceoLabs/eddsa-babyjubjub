@@ -1,6 +1,6 @@
 [package]
 name = "taceo-eddsa-babyjubjub"
-version = "0.6.1"
+version = "0.6.2"
 edition.workspace = true
 # Higher than the workspace MSRV: `taceo-ark-serde-compat` 0.6 requires 1.90.
 rust-version = "1.90"
@@ -11,7 +11,7 @@ license.workspace = true
 publish = true
 
 [dependencies]
-ark-babyjubjub = { package = "taceo-ark-babyjubjub", path = "../ark-babyjubjub", version = "0.6.0" }
+ark-babyjubjub = { package = "taceo-ark-babyjubjub", path = "../ark-babyjubjub", version = "0.6.1" }
 ark-ec = { workspace = true }
 ark-ff = { workspace = true }
 ark-serde-compat = { workspace = true }
