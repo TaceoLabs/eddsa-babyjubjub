@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.6.1](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-ark-babyjubjub-v0.6.0...taceo-ark-babyjubjub-v0.6.1)
+
+### 🐛 Bug Fixes
+
+
+- *(ark-babyjubjub)* Harden the ladder's masked selects and align side-channel docs - ([b312921](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/b312921bfd61602ab188e863dff702080c4579a2))
+
+
 ## [0.6.0](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-ark-babyjubjub-v0.5.3...taceo-ark-babyjubjub-v0.6.0)
 
 ### 🚜 Refactor

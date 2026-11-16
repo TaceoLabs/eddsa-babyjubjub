@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.6.2](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-eddsa-babyjubjub-v0.6.1...taceo-eddsa-babyjubjub-v0.6.2)
+
+### 🐛 Bug Fixes
+
+
+- *(eddsa)* Reject non-canonical signature encodings - ([57f5682](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/57f5682c09b50c3b07c2277967d30d8a625eb172))
+- Zeroize secret intermediates during signing - ([074cc9f](https://github.com/TaceoLabs/eddsa-babyjubjub/commit/074cc9f0cd4bcb320f9dbef70b5fb096cc59964d))
+
+
 ## [0.6.1](https://github.com/TaceoLabs/eddsa-babyjubjub/compare/taceo-eddsa-babyjubjub-v0.6.0...taceo-eddsa-babyjubjub-v0.6.1)
 
 ### ⛰️ Features
